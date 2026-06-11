@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { validateChart } from '../api/calibration-validate.js';
+import { extractBearerToken } from '../api/auth-token.js';
 import { normalizeSalesRows } from '../api/sales-validate.js';
 import { normalizeStockMovementRows, normalizeTankerUnloadingRows } from '../api/stock-validate.js';
 import { resolveTable } from '../api/table-resolve.js';
@@ -36,6 +37,13 @@ test('runtime config restricts exposed resources to the known API surface', () =
   assert.equal(isAllowedResource('sales'), true);
   assert.equal(isAllowedResource('finance'), true);
   assert.equal(isAllowedResource('admin-only-table'), false);
+});
+
+test('auth helper extracts bearer tokens safely', () => {
+  assert.equal(extractBearerToken('Bearer abc.def'), 'abc.def');
+  assert.equal(extractBearerToken('bearer xyz'), 'xyz');
+  assert.equal(extractBearerToken('Token xyz'), null);
+  assert.equal(extractBearerToken(undefined), null);
 });
 
 test('runtime config parses and enforces optional origin allowlists', () => {

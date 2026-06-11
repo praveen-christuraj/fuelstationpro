@@ -4,6 +4,7 @@ import { normalizeSalesRows } from './sales-validate.js';
 import { normalizeStockMovementRows, normalizeTankerUnloadingRows } from './stock-validate.js';
 import { resolveTable } from './table-resolve.js';
 import { applyCorsHeaders, isAllowedResource, isOriginAllowed } from './runtime-config.js';
+import { authenticateRequest } from './auth.js';
 
 const TXN_TABLES = [
   'tanker_unloading', 'stock_movements', 'sales', 'credit_sales', 'finance_transactions',
@@ -26,6 +27,11 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: 'Origin not allowed' });
   }
   if (req.method === 'OPTIONS') return res.status(204).end();
+
+  const auth = await authenticateRequest(req);
+  if (!auth.ok) {
+    return res.status(auth.status).json({ error: auth.error });
+  }
 
   const parts = parsePath(req.url);
   const resource = parts[0];
