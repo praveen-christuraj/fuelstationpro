@@ -5,30 +5,33 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(204).end();
+
+  const table = req.query.table?.[0];
+  if (!table) return res.status(404).json({ error: 'Not found' });
+
+  const dbTable = table.replace(/-/g, '_');
+
   try {
     if (req.method === 'GET') {
-      const tankId = req.query.tank_id;
-      let q = supabase.from('tank_calibration').select('*').order('dip_cm', { ascending: true });
-      if (tankId) q = q.eq('tank_id', tankId);
-      const { data, error } = await q;
+      const { data, error } = await supabase.from(dbTable).select('*').order('id', { ascending: false });
       if (error) throw error;
       return res.status(200).json(data);
     }
     if (req.method === 'POST') {
       const rows = Array.isArray(req.body) ? req.body : [req.body];
-      const { data, error } = await supabase.from('tank_calibration').insert(rows).select();
+      const { data, error } = await supabase.from(dbTable).insert(rows).select();
       if (error) throw error;
       return res.status(201).json(data);
     }
+    if (req.method === 'PUT') {
+      const { id, ...rest } = req.body;
+      const { data, error } = await supabase.from(dbTable).update(rest).eq('id', id).select().single();
+      if (error) throw error;
+      return res.status(200).json(data);
+    }
     if (req.method === 'DELETE') {
-      const { tank_id } = req.body;
-      if (tank_id) {
-        const { error } = await supabase.from('tank_calibration').delete().eq('tank_id', tank_id);
-        if (error) throw error;
-        return res.status(200).json({ ok: true });
-      }
       const { id } = req.body;
-      const { error } = await supabase.from('tank_calibration').delete().eq('id', id);
+      const { error } = await supabase.from(dbTable).delete().eq('id', id);
       if (error) throw error;
       return res.status(200).json({ ok: true });
     }
