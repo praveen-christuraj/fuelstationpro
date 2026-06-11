@@ -1,15 +1,18 @@
 import supabase from './db-client.js';
 
+function getTable(url) {
+  const parts = new URL(url, 'http://localhost').pathname.replace('/api/', '').split('/');
+  return parts[0].replace(/-/g, '_');
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(204).end();
 
-  const table = req.query.table?.[0];
-  if (!table) return res.status(404).json({ error: 'Not found' });
-
-  const dbTable = table.replace(/-/g, '_');
+  const dbTable = getTable(req.url);
+  if (!dbTable) return res.status(404).json({ error: 'Not found' });
 
   try {
     if (req.method === 'GET') {
