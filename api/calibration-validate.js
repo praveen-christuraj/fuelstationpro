@@ -21,8 +21,10 @@ export function validateChart(points, tankCapacity) {
   if (errors.length > 0) return { valid: false, errors };
 
   for (let i = 0; i < points.length; i++) {
-    p.dip_cm = Number(p.dip_cm);
-    p.volume_liters = Number(p.volume_liters);
+    points[i] = {
+      dip_cm: Number(points[i].dip_cm),
+      volume_liters: Number(points[i].volume_liters),
+    };
   }
 
   for (let i = 1; i < points.length; i++) {

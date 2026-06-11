@@ -3,19 +3,22 @@ import { Card, CardHeader } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 
 const phases = [
-  { name: 'Phase 1 — Backend Planning & DB Design', status: 'done', items: ['Define entity-relationship model', 'Design Supabase schema (12 tables)', 'Set up RLS & auth', 'Seed master data'] },
-  { name: 'Phase 2 — Web Module (Live on Vercel)', status: 'done', items: ['Auth (email + Google)', 'Master setup pages (soft-coded)', 'Operations: unloading, dip-volume, sales', 'Finance & advanced reports', 'Bulk upload wizards'] },
-  { name: 'Phase 3 — Android Guide', status: 'progress', items: ['Kotlin (Jetpack Compose) reference', 'React Native Expo reference', 'Shared Supabase client', 'Offline-first sync strategy'] },
-  { name: 'Phase 4 — Testing & Go Live', status: 'todo', items: ['Unit & integration tests', 'UAT with station staff', 'Data migration & cutover', 'Production monitoring'] },
+  { name: 'Phase 1 — Backend Planning & DB Design', status: 'done', items: ['Canonical schema aligned to 16 tables', 'Specialized validation for calibration, sales, stock, and unloading', 'Supabase auth integrated', 'Serverless API routing in place'] },
+  { name: 'Phase 2 — Web Module', status: 'done', items: ['Auth (email + Google)', 'Master setup pages', 'Operations: unloading, dip-volume, stock, sales', 'Finance, reports, and bulk upload wizards'] },
+  { name: 'Phase 3 — Documentation & Test Hardening', status: 'progress', items: ['Repository README updated', 'Focused regression tests added', 'In-app docs being aligned to implementation', 'Operational guidance clarified'] },
+  { name: 'Phase 4 — Rollout & Production Hardening', status: 'todo', items: ['UAT with station staff', 'Supabase RLS review', 'Data migration and cutover', 'Monitoring, backups, and rollback plan'] },
 ];
 
 export default function ProjectPlan() {
   return (
     <div className="space-y-5">
-      <div><h1 className="text-xl font-bold text-slate-800">Project Plan</h1><p className="text-sm text-slate-400 mt-0.5">End-to-end delivery roadmap for the Fuel Station Management System</p></div>
+      <div><h1 className="text-xl font-bold text-slate-800">Project Plan</h1><p className="text-sm text-slate-400 mt-0.5">Implementation status plus the remaining rollout roadmap for FuelFlow</p></div>
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-        {[['Modules', '6'], ['DB Tables', '12'], ['API Routes', '16'], ['Platforms', 'Web + Android']].map(([l, v]) => <Card key={l} className="p-4"><div className="text-xs text-slate-400">{l}</div><div className="text-lg font-bold text-slate-800 mt-0.5">{v}</div></Card>)}
+        {[['Modules', '6'], ['DB Tables', '16'], ['Test Scope', 'Focused'], ['Platforms', 'Web + Mobile Docs']].map(([l, v]) => <Card key={l} className="p-4"><div className="text-xs text-slate-400">{l}</div><div className="text-lg font-bold text-slate-800 mt-0.5">{v}</div></Card>)}
       </div>
+      <Card className="p-5 bg-blue-50 border-blue-100">
+        <p className="text-sm text-blue-800">This page mixes current implementation status with planned rollout work. Web features listed as complete exist in this repository. Android content remains reference guidance rather than an implemented mobile client.</p>
+      </Card>
       <div className="relative space-y-4">
         {phases.map((p, i) => (
           <Card key={i} className="p-5">

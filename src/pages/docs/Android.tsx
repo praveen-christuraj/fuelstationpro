@@ -21,7 +21,8 @@ export default function Android() {
   const [tab, setTab] = useState<'kotlin' | 'expo'>('kotlin');
   return (
     <div className="space-y-5">
-      <div><h1 className="text-xl font-bold text-slate-800">Android Guide</h1><p className="text-sm text-slate-400 mt-0.5">Copy-paste-ready references for native Kotlin & React Native Expo, sharing the same Supabase backend</p></div>
+      <div><h1 className="text-xl font-bold text-slate-800">Android Guide</h1><p className="text-sm text-slate-400 mt-0.5">Reference material for a future mobile client. These examples are not implemented or shipped from this repository.</p></div>
+      <Card className="p-5 bg-blue-50 border-blue-100"><p className="text-sm text-blue-800">Status: documentation only. Use these snippets as starting points for a separate Android or Expo project that targets the same Supabase backend. They are intentionally illustrative rather than production-complete mobile code.</p></Card>
       <div className="inline-flex rounded-lg border border-slate-200 p-0.5">
         <button onClick={() => setTab('kotlin')} className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium ${tab === 'kotlin' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}><Smartphone className="w-4 h-4" /> Kotlin (Jetpack Compose)</button>
         <button onClick={() => setTab('expo')} className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium ${tab === 'expo' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}><FileCode className="w-4 h-4" /> React Native (Expo)</button>

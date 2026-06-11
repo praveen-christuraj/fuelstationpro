@@ -1,8 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
+import { getRequiredClientEnv } from './client-env';
 
 const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  getRequiredClientEnv('VITE_SUPABASE_URL'),
+  getRequiredClientEnv('VITE_SUPABASE_ANON_KEY')
 );
 
 export default supabase;
