@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, TrendingDown, Droplet, Wallet, AlertTriangle, Fuel, ArrowUpRight, Boxes } from 'lucide-react';
+import { Droplet, Wallet, AlertTriangle, Fuel, ArrowUpRight, Boxes } from 'lucide-react';
 import { Card, CardHeader } from '../components/ui/Card';
 import { BarChart, LineChart, DonutChart } from '../components/Charts';
 import { Loading, ErrorState } from '../components/ui/States';
@@ -54,10 +54,10 @@ export default function Dashboard() {
   const shiftBars = Object.entries(byShift).map(([label, value]) => ({ label, value: Math.round(value) }));
 
   const kpis = [
-    { label: 'Total Sales', value: fmtMoney(totalSalesAmt), icon: Wallet, color: 'blue', trend: '+12.4%', up: true },
-    { label: 'Volume Dispensed', value: fmtNum(totalVol, 0) + ' L', icon: Droplet, color: 'emerald', trend: '+8.1%', up: true },
-    { label: 'Current Stock', value: fmtNum(totalStock, 0) + ' L', icon: Boxes, color: 'violet', trend: `${tanks.length} tanks`, up: true },
-    { label: 'Outstanding Credit', value: fmtMoney(totalCredit), icon: AlertTriangle, color: 'amber', trend: `${credit.filter((c) => c.status !== 'Paid').length} open`, up: false },
+    { label: 'Total Sales', value: totalSalesAmt ? fmtMoney(totalSalesAmt) : '₹0.00', icon: Wallet, color: 'blue' },
+    { label: 'Volume Dispensed', value: totalVol ? fmtNum(totalVol, 0) + ' L' : '0 L', icon: Droplet, color: 'emerald' },
+    { label: 'Current Stock', value: fmtNum(totalStock, 0) + ' L', icon: Boxes, color: 'violet' },
+    { label: 'Outstanding Credit', value: totalCredit ? fmtMoney(totalCredit) : '₹0.00', icon: AlertTriangle, color: 'amber' },
   ];
   const colorMap: Record<string, string> = { blue: 'from-blue-500 to-blue-600', emerald: 'from-emerald-500 to-emerald-600', violet: 'from-violet-500 to-violet-600', amber: 'from-amber-500 to-amber-600' };
 
@@ -76,7 +76,6 @@ export default function Dashboard() {
           <Card key={k.label} className="p-5">
             <div className="flex items-start justify-between">
               <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${colorMap[k.color]} flex items-center justify-center shadow-sm`}><k.icon className="w-5 h-5 text-white" /></div>
-              <span className={`inline-flex items-center gap-0.5 text-xs font-medium ${k.up ? 'text-emerald-600' : 'text-amber-600'}`}>{k.up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}{k.trend}</span>
             </div>
             <div className="mt-3"><div className="text-2xl font-bold text-slate-800">{k.value}</div><div className="text-xs text-slate-400 mt-0.5">{k.label}</div></div>
           </Card>
