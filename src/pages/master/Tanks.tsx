@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, Upload, FileDown, Gauge, Database } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import Modal, { ConfirmModal } from '../../components/ui/Modal';
-import { Field, Input, Select } from '../../components/ui/Field';
+import { Field, Input } from '../../components/ui/Field';
 import { Loading, ErrorState, EmptyState } from '../../components/ui/States';
 import { Badge } from '../../components/ui/Badge';
 import { apiGet, apiPost, apiPut, apiDelete, fmtNum } from '../../lib/api';
@@ -18,8 +18,10 @@ export default function Tanks() {
   const [formErr, setFormErr] = useState('');
   const [delTarget, setDelTarget] = useState<any>(null);
   const [calTank, setCalTank] = useState<any>(null);
-  const [calData, setCalData] = useState<any[]>([]);
+  const [calPoints, setCalPoints] = useState<any[]>([]);
   const [calMsg, setCalMsg] = useState('');
+  const [calErr, setCalErr] = useState('');
+  const [calSaving, setCalSaving] = useState(false);
 
   const load = async () => {
     setLoading(true); setError('');
@@ -44,26 +46,52 @@ export default function Tanks() {
   const remove = async (t: any) => { await apiDelete('/api/tanks', { id: t.id }); await load(); };
 
   const openCal = async (t: any) => {
-    setCalTank(t); setCalMsg('');
-    try { setCalData(await apiGet(`/api/calibration?tank_id=${t.id}`)); } catch { setCalData([]); }
+    setCalTank(t); setCalMsg(''); setCalErr('');
+    try {
+      const resp = await apiGet(`/api/tanks/${t.id}/calibration`);
+      setCalPoints(resp.points || []);
+    } catch { setCalPoints([]); }
   };
 
   const downloadCalTemplate = () => {
-    const sample = Array.from({ length: 5 }, (_, i) => ({ tank_id: calTank.id, dip_cm: (i + 1) * 10, volume_liters: (i + 1) * 850 }));
-    downloadCSV(`tank_${calTank.id}_calibration_template.csv`, toCSV(sample, ['tank_id', 'dip_cm', 'volume_liters']));
+    const sample = Array.from({ length: 5 }, (_, i) => ({ dip_cm: (i + 1) * 10, volume_liters: (i + 1) * 850 }));
+    downloadCSV(`tank_calibration_template.csv`, toCSV(sample, ['dip_cm', 'volume_liters']));
+  };
+
+  const validateLocal = (points: { dip_cm: number; volume_liters: number }[]) => {
+    const errs: string[] = [];
+    if (points.length < 2) errs.push('Need at least 2 calibration points');
+    for (let i = 1; i < points.length; i++) {
+      if (points[i].dip_cm <= points[i - 1].dip_cm) errs.push(`Row ${i + 1}: dip_cm (${points[i].dip_cm}) must be > row ${i} (${points[i - 1].dip_cm})`);
+      if (points[i].volume_liters < points[i - 1].volume_liters) errs.push(`Row ${i + 1}: volume_liters decreased from ${points[i - 1].volume_liters} to ${points[i].volume_liters}`);
+    }
+    const dips = points.map((p) => p.dip_cm);
+    const dupes = dips.filter((d, i) => dips.indexOf(d) !== i);
+    if (dupes.length) errs.push(`Duplicate dip_cm values: ${[...new Set(dupes)].join(', ')}`);
+    return errs;
   };
 
   const onCalFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
+    setCalMsg(''); setCalErr('');
     const reader = new FileReader();
     reader.onload = async () => {
-      const rows = parseCSV(String(reader.result || '')).map((r) => ({ tank_id: calTank.id, dip_cm: Number(r.dip_cm), volume_liters: Number(r.volume_liters) })).filter((r) => !isNaN(r.dip_cm) && !isNaN(r.volume_liters));
+      const raw = parseCSV(String(reader.result || '')).map((r) => ({ dip_cm: Number(r.dip_cm), volume_liters: Number(r.volume_liters) })).filter((r) => !isNaN(r.dip_cm) && !isNaN(r.volume_liters));
+      const localErrs = validateLocal(raw);
+      if (localErrs.length) { setCalErr(localErrs.join('; ')); return; }
+      setCalSaving(true);
       try {
-        await apiDelete('/api/calibration', { tank_id: calTank.id });
-        await apiPost('/api/calibration', rows);
-        setCalData(await apiGet(`/api/calibration?tank_id=${calTank.id}`));
-        setCalMsg(`Imported ${rows.length} calibration points successfully.`);
-      } catch (err: any) { setCalMsg('Import failed: ' + err.message); }
+        const resp = await fetch(`/api/tanks/${calTank.id}/calibration`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ points: raw }),
+        });
+        if (!resp.ok) { const e = await resp.json(); throw new Error(e.error || 'Upload failed'); }
+        const result = await resp.json();
+        setCalPoints(result.points || []);
+        setCalMsg(`Imported ${result.count} calibration points.`);
+      } catch (err: any) { setCalErr(err.message); }
+      finally { setCalSaving(false); }
     };
     reader.readAsText(file);
   };
@@ -115,13 +143,15 @@ export default function Tanks() {
         <div className="flex flex-wrap gap-2 mb-4">
           <button onClick={downloadCalTemplate} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100"><FileDown className="w-4 h-4" /> Download Template</button>
           <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 cursor-pointer"><Upload className="w-4 h-4" /> Upload Calibration CSV<input type="file" accept=".csv" onChange={onCalFile} className="hidden" /></label>
-          {calData.length > 0 && <Badge color="green">{calData.length} points loaded</Badge>}
+          {calPoints.length > 0 && <Badge color="green">{calPoints.length} points loaded</Badge>}
         </div>
         {calMsg && <p className="text-sm text-emerald-600 mb-3">{calMsg}</p>}
+        {calErr && <p className="text-sm text-rose-600 mb-3">{calErr}</p>}
+        {calSaving && <p className="text-sm text-blue-600 mb-3">Uploading and replacing calibration chart…</p>}
         <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0"><tr><th className="text-left px-4 py-2">Dip (cm)</th><th className="text-left px-4 py-2">Volume (L)</th></tr></thead>
-            <tbody className="divide-y divide-slate-50">{calData.map((c) => <tr key={c.id}><td className="px-4 py-2 text-slate-700">{fmtNum(c.dip_cm, 1)}</td><td className="px-4 py-2 text-slate-700">{fmtNum(c.volume_liters, 0)}</td></tr>)}{calData.length === 0 && <tr><td colSpan={2} className="px-4 py-8 text-center text-slate-400 text-sm">No calibration data — upload a chart above</td></tr>}</tbody>
+            <tbody className="divide-y divide-slate-50">{calPoints.map((c, i) => <tr key={i}><td className="px-4 py-2 text-slate-700">{fmtNum(c.dip_cm, 1)}</td><td className="px-4 py-2 text-slate-700">{fmtNum(c.volume_liters, 0)}</td></tr>)}{calPoints.length === 0 && <tr><td colSpan={2} className="px-4 py-8 text-center text-slate-400 text-sm">No calibration data — upload a chart above</td></tr>}</tbody>
           </table>
         </div>
       </Modal>
