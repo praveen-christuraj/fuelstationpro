@@ -38,8 +38,12 @@ export default function Tanks() {
 
   const save = async () => {
     if (!form.name || !form.product_name || !form.capacity) { setFormErr('Name, Product and Capacity are required'); return; }
+    const cap = Number(form.capacity);
+    if (cap <= 0) { setFormErr('Capacity must be greater than 0'); return; }
+    const ds = Number(form.dead_stock || 0);
+    if (ds >= cap) { setFormErr('Dead stock must be less than capacity'); return; }
     try {
-      const payload = { name: form.name, code: form.code, product_name: form.product_name, capacity: Number(form.capacity), current_volume: Number(form.current_volume || 0), dead_stock: Number(form.dead_stock || 0), diameter: Number(form.diameter || 0) };
+      const payload = { name: form.name, code: form.code, product_name: form.product_name, capacity: cap, current_volume: Number(form.current_volume || 0), dead_stock: ds, diameter: Number(form.diameter || 0) };
       if (editing) await apiPut('/api/tanks', { id: editing.id, ...payload });
       else await apiPost('/api/tanks', payload);
       setModal(false); await load();

@@ -6,7 +6,7 @@ export default function Operators() {
     { key: 'id', label: 'ID', hideInForm: true },
     { key: 'name', label: 'Full Name', required: true },
     { key: 'emp_code', label: 'Employee Code', required: true },
-    { key: 'phone', label: 'Phone' },
+    { key: 'phone', label: 'Phone', pattern: '^[+]?[\\d\\s-]{7,15}$', patternMessage: 'Invalid phone number (7-15 digits with optional +)' },
     { key: 'role', label: 'Role', type: 'select', options: [{ value: 'Operator', label: 'Operator' }, { value: 'Supervisor', label: 'Supervisor' }, { value: 'Cashier', label: 'Cashier' }] },
     { key: 'active', label: 'Active', type: 'boolean', render: (r) => r.active ? <Badge color="green">Active</Badge> : <Badge color="slate">Inactive</Badge> },
   ]} />;

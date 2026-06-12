@@ -94,6 +94,95 @@ async function beforeDeleteCheck(dbTable, id, supabase) {
   }
 }
 
+const UNIQUE_FIELDS = {
+  products: ['name', 'code'],
+  tanks: ['name', 'code'],
+  dispensers: ['name', 'code'],
+  nozzles: ['name', 'code'],
+  operators: ['name', 'emp_code'],
+  shifts: ['name'],
+  suppliers: ['name'],
+  meters: ['serial_no'],
+  bank_accounts: ['account_no'],
+};
+
+async function checkDuplicateFields(dbTable, body, supabase, excludeId) {
+  const fields = UNIQUE_FIELDS[dbTable];
+  if (!fields) return;
+  for (const field of fields) {
+    const value = body[field];
+    if (value == null || String(value).trim() === '') continue;
+    let query = supabase.from(dbTable).select('id').eq(field, String(value).trim());
+    if (excludeId) query = query.neq('id', excludeId);
+    const { data, error } = await query.limit(1).maybeSingle();
+    if (error) throw error;
+    if (data) throw new Error(`${dbTable.slice(0, -1)} with ${field} "${value}" already exists`);
+  }
+}
+
+const FIELD_VALIDATIONS = {
+  products: {
+    current_price: (v) => v == null || v === '' || Number(v) >= 0 || 'Price must be 0 or greater',
+  },
+  tanks: {
+    capacity: (v) => v != null && v !== '' && Number(v) > 0 || 'Capacity must be greater than 0',
+    dead_stock: (v, body) => v == null || v === '' || Number(v) < Number(body.capacity || 0) || 'Dead stock must be less than capacity',
+  },
+  operators: {
+    phone: (v) => !v || /^\+?[\d\s-]{7,15}$/.test(String(v)) || 'Invalid phone number format (7-15 digits with optional +)',
+  },
+  suppliers: {
+    phone: (v) => !v || /^\+?[\d\s-]{7,15}$/.test(String(v)) || 'Invalid phone number format',
+    gst_no: (v) => !v || /^\d{2}[A-Z]{5}\d{4}[A-Z]\d[Z]\d[A-Z\d]$/.test(String(v).toUpperCase()) || 'Invalid GST number format (e.g., 22AAAAA0000A1Z5)',
+  },
+  bank_accounts: {
+    account_no: (v) => v == null || v === '' || String(v).length >= 6 || 'Account number must be at least 6 characters',
+    ifsc: (v) => !v || /^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(String(v)) || 'Invalid IFSC code format (e.g., SBIN0001234)',
+  },
+  meters: {
+    opening_reading: (v) => v == null || v === '' || Number(v) >= 0 || 'Opening reading must be 0 or greater',
+    current_reading: (v, body) => v == null || v === '' || body.opening_reading == null || body.opening_reading === '' || Number(v) >= Number(body.opening_reading) || 'Current reading must be >= opening reading',
+  },
+};
+
+function validateFields(dbTable, body, rows) {
+  const validations = FIELD_VALIDATIONS[dbTable];
+  if (!validations) return;
+  const items = rows || [body];
+  for (const item of items) {
+    for (const [field, validator] of Object.entries(validations)) {
+      const result = validator(item[field], item);
+      if (result !== true && typeof result === 'string') {
+        throw new Error(result);
+      }
+    }
+  }
+}
+
+const CROSS_REFERENCE_TABLES = {
+  nozzles: [
+    { field: 'dispenser_name', refTable: 'dispensers', refField: 'name', label: 'Dispenser' },
+    { field: 'tank_name', refTable: 'tanks', refField: 'name', label: 'Tank' },
+    { field: 'product_name', refTable: 'products', refField: 'name', label: 'Product' },
+  ],
+};
+
+async function checkCrossReferences(dbTable, body, rows, supabase) {
+  const refs = CROSS_REFERENCE_TABLES[dbTable];
+  if (!refs) return;
+  const items = rows || [body];
+  for (const ref of refs) {
+    const values = [...new Set(items.map((item) => String(item[ref.field] ?? '').trim()).filter(Boolean))];
+    if (values.length === 0) continue;
+    const { data, error } = await supabase.from(ref.refTable).select(ref.refField).in(ref.refField, values);
+    if (error) throw error;
+    const found = new Set((data || []).map((r) => r[ref.refField]));
+    for (const val of values) {
+      if (!found.has(val)) throw new Error(`${ref.label} not found: ${val}`);
+    }
+  }
+}
+
 function parsePath(url) {
   const parts = new URL(url, 'http://localhost').pathname.replace('/api/', '').split('/').filter(Boolean);
   return parts;
@@ -183,6 +272,11 @@ export default async function handler(req, res) {
     }
     if (req.method === 'POST') {
       const rows = Array.isArray(req.body) ? req.body : [req.body];
+      validateFields(dbTable, req.body, rows);
+      await checkCrossReferences(dbTable, req.body, rows, supabase);
+      for (const row of rows) {
+        await checkDuplicateFields(dbTable, row, supabase);
+      }
       const { data, error } = await supabase.from(dbTable).insert(rows).select();
       if (error) throw error;
       return res.status(201).json(data);
@@ -191,6 +285,9 @@ export default async function handler(req, res) {
       const { id } = req.body || {};
       if (!id) return res.status(400).json({ error: 'ID is required' });
       const { id: _id, ...rest } = req.body;
+      validateFields(dbTable, rest);
+      await checkCrossReferences(dbTable, rest, null, supabase);
+      await checkDuplicateFields(dbTable, rest, supabase, id);
       const { data, error } = await supabase.from(dbTable).update(rest).eq('id', id).select().single();
       if (error) throw error;
       return res.status(200).json(data);

@@ -2,6 +2,31 @@
 -- Uses CREATE TABLE IF NOT EXISTS for new tables
 -- Uses ALTER TABLE ... ADD COLUMN IF NOT EXISTS for columns on existing tables
 
+-- ===== UNIQUE CONSTRAINTS (applied after all table creations) =====
+-- Products
+ALTER TABLE products ADD CONSTRAINT IF NOT EXISTS products_name_key UNIQUE (name);
+ALTER TABLE products ADD CONSTRAINT IF NOT EXISTS products_code_key UNIQUE (code);
+-- Tanks
+ALTER TABLE tanks ADD CONSTRAINT IF NOT EXISTS tanks_name_key UNIQUE (name);
+ALTER TABLE tanks ADD CONSTRAINT IF NOT EXISTS tanks_code_key UNIQUE (code);
+-- Dispensers
+ALTER TABLE dispensers ADD CONSTRAINT IF NOT EXISTS dispensers_name_key UNIQUE (name);
+ALTER TABLE dispensers ADD CONSTRAINT IF NOT EXISTS dispensers_code_key UNIQUE (code);
+-- Nozzles
+ALTER TABLE nozzles ADD CONSTRAINT IF NOT EXISTS nozzles_name_key UNIQUE (name);
+ALTER TABLE nozzles ADD CONSTRAINT IF NOT EXISTS nozzles_code_key UNIQUE (code);
+-- Operators
+ALTER TABLE operators ADD CONSTRAINT IF NOT EXISTS operators_name_key UNIQUE (name);
+ALTER TABLE operators ADD CONSTRAINT IF NOT EXISTS operators_emp_code_key UNIQUE (emp_code);
+-- Shifts
+ALTER TABLE shifts ADD CONSTRAINT IF NOT EXISTS shifts_name_key UNIQUE (name);
+-- Suppliers
+ALTER TABLE suppliers ADD CONSTRAINT IF NOT EXISTS suppliers_name_key UNIQUE (name);
+-- Meters
+ALTER TABLE meters ADD CONSTRAINT IF NOT EXISTS meters_serial_no_key UNIQUE (serial_no);
+-- Bank Accounts
+ALTER TABLE bank_accounts ADD CONSTRAINT IF NOT EXISTS bank_accounts_account_no_key UNIQUE (account_no);
+
 -- 1. products
 CREATE TABLE IF NOT EXISTS products (
   id bigint primary key generated always as identity,
@@ -64,8 +89,9 @@ ALTER TABLE tank_calibration ADD COLUMN IF NOT EXISTS dip_mm numeric(10,2);
 UPDATE tank_calibration SET dip_mm = dip_cm * 10 WHERE dip_mm IS NULL AND dip_cm IS NOT NULL;
 ALTER TABLE tank_calibration DROP CONSTRAINT IF EXISTS tank_calibration_tank_id_dip_cm_key;
 CREATE INDEX IF NOT EXISTS idx_tank_calibration_tank_dip on tank_calibration (tank_id, dip_mm);
--- After confirming dip_mm has data, uncomment:
--- ALTER TABLE tank_calibration DROP COLUMN IF EXISTS dip_cm;
+-- Drop the legacy dip_cm column (migrated to dip_mm)
+ALTER TABLE tank_calibration ALTER COLUMN dip_cm DROP NOT NULL;
+ALTER TABLE tank_calibration DROP COLUMN IF EXISTS dip_cm;
 
 -- 5. dispensers
 CREATE TABLE IF NOT EXISTS dispensers (

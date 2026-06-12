@@ -21,6 +21,11 @@ export interface ColumnDef {
   hideInTable?: boolean;
   default?: any;
   onFieldChange?: (form: any, key: string, value: any, option?: any) => Record<string, any>;
+  pattern?: string;
+  patternMessage?: string;
+  min?: number;
+  max?: number;
+  minLength?: number;
 }
 
 interface Props {
@@ -100,9 +105,21 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
 
   const save = async () => {
     for (const c of columns) {
-      if (c.required && !c.hideInForm && (form[c.key] === '' || form[c.key] == null)) {
+      if (c.hideInForm) continue;
+      const val = form[c.key];
+      if (c.required && (val === '' || val == null)) {
         setFormErr(`${c.label} is required`); return;
       }
+      if (val === '' || val == null) continue;
+      if (c.pattern && new RegExp(c.pattern).test(String(val)) === false) {
+        setFormErr(c.patternMessage || `Invalid ${c.label}`); return;
+      }
+      if (c.type === 'number' || c.type === 'text') {
+        const num = Number(val);
+        if (c.min != null && num < c.min) { setFormErr(`${c.label} must be ${c.min} or greater`); return; }
+        if (c.max != null && num > c.max) { setFormErr(`${c.label} must be ${c.max} or less`); return; }
+      }
+      if (c.minLength != null && String(val).length < c.minLength) { setFormErr(`${c.label} must be at least ${c.minLength} characters`); return; }
     }
     setSaving(true); setFormErr('');
     try {
@@ -222,7 +239,7 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
                       <span className="text-sm text-slate-600">Enabled</span>
                     </label>
                   ) : (
-                    <Input type={c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'} step="any" value={form[c.key] ?? ''} onChange={(e) => handleFieldChange(c, e.target.value)} />
+                    <Input type={c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'} step="any" value={form[c.key] ?? ''} pattern={c.pattern} min={c.min} max={c.max} minLength={c.minLength} onChange={(e) => handleFieldChange(c, e.target.value)} />
                   )}
                 </Field>
               </div>
