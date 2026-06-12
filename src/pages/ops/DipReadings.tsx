@@ -5,6 +5,7 @@ import Modal from '../../components/ui/Modal';
 import { Field, Input, Select } from '../../components/ui/Field';
 import { Loading, ErrorState } from '../../components/ui/States';
 import { apiGet, apiPost, fmtNum, fmtDate } from '../../lib/api';
+import { interpolateVolume } from '../../lib/interp';
 
 type ReadingType = 'opening' | 'closing' | 'unloading_before' | 'unloading_after';
 
@@ -54,32 +55,12 @@ export default function DipReadings() {
     return points;
   };
 
-  const interp = (points: any[], dip: number) => {
-    if (!Array.isArray(points) || points.length < 2 || !Number.isFinite(dip)) return null;
-    const sorted = [...points].sort((a, b) => Number(a.dip_mm) - Number(b.dip_mm));
-    if (dip <= Number(sorted[0].dip_mm)) return Number(sorted[0].volume_liters);
-    if (dip >= Number(sorted[sorted.length - 1].dip_mm)) return Number(sorted[sorted.length - 1].volume_liters);
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const a = sorted[i];
-      const b = sorted[i + 1];
-      const da = Number(a.dip_mm);
-      const db = Number(b.dip_mm);
-      if (dip >= da && dip <= db) {
-        const va = Number(a.volume_liters);
-        const vb = Number(b.volume_liters);
-        const frac = (dip - da) / (db - da || 1);
-        return va + frac * (vb - va);
-      }
-    }
-    return null;
-  };
-
   const computedVolume = useMemo(() => {
     const dip = Number(form.dip_mm);
     const tank = tanks.find((t) => t.name === form.tank_name);
     if (!tank || !Number.isFinite(dip)) return null;
     const points = pointsCache[String(tank.id)] || [];
-    return interp(points, dip);
+    return interpolateVolume(points, dip);
   }, [form.dip_mm, form.tank_name, tanks, pointsCache]);
 
   const openCreate = () => {

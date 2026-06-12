@@ -54,6 +54,7 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
   useEffect(() => { load(); }, [endpoint]);
 
   useEffect(() => {
+    let mounted = true;
     const dynamicCols = columns.filter((c) => c.optionsEndpoint && !c.options);
     if (dynamicCols.length === 0) return;
     dynamicCols.forEach(async (c) => {
@@ -62,10 +63,17 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
       setLoadingOptions((prev) => ({ ...prev, [ep]: true }));
       try {
         const data = await apiGet(ep);
+        if (!mounted) return;
         setOptionsCache((prev) => ({ ...prev, [ep]: Array.isArray(data) ? data : data?.points || [] }));
-      } catch { setOptionsCache((prev) => ({ ...prev, [ep]: [] })); }
-      finally { setLoadingOptions((prev) => ({ ...prev, [ep]: false })); }
+      } catch {
+        if (!mounted) return;
+        setOptionsCache((prev) => ({ ...prev, [ep]: [] }));
+      }
+      finally {
+        if (mounted) setLoadingOptions((prev) => ({ ...prev, [ep]: false }));
+      }
     });
+    return () => { mounted = false; };
   }, [columns, optionsCache]);
 
   const getOptions = (c: ColumnDef) => {

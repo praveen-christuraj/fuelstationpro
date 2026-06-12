@@ -73,10 +73,15 @@ export default function BulkUploadWizard({ title, description, endpoint, fields,
     try {
       await apiPost(endpoint, payload);
       ok = payload.length;
-    } catch {
-      // fallback: one-by-one
-      for (const row of payload) {
-        try { await apiPost(endpoint, row); ok++; } catch { fail++; }
+    } catch (e: any) {
+      const msg = String(e?.message || '');
+      const isClientError = /failed: 4\d\d/.test(msg);
+      if (isClientError) {
+        for (const row of payload) {
+          try { await apiPost(endpoint, row); ok++; } catch { fail++; }
+        }
+      } else {
+        fail = payload.length;
       }
     }
     setResult({ ok, fail }); setUploading(false); setStep(3);

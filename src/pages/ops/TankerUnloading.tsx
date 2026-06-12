@@ -6,6 +6,7 @@ import { Field, Input, Select } from '../../components/ui/Field';
 import Modal from '../../components/ui/Modal';
 import { Loading, ErrorState } from '../../components/ui/States';
 import { apiGet, apiPost, fmtDate, fmtNum } from '../../lib/api';
+import { interpolateVolume } from '../../lib/interp';
 
 export default function TankerUnloading() {
   const [loading, setLoading] = useState(true);
@@ -67,26 +68,6 @@ export default function TankerUnloading() {
     return points;
   };
 
-  const interp = (points: any[], dip: number) => {
-    if (!Array.isArray(points) || points.length < 2 || !Number.isFinite(dip)) return null;
-    const sorted = [...points].sort((a, b) => Number(a.dip_mm) - Number(b.dip_mm));
-    if (dip <= Number(sorted[0].dip_mm)) return Number(sorted[0].volume_liters);
-    if (dip >= Number(sorted[sorted.length - 1].dip_mm)) return Number(sorted[sorted.length - 1].volume_liters);
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const a = sorted[i];
-      const b = sorted[i + 1];
-      const da = Number(a.dip_mm);
-      const db = Number(b.dip_mm);
-      if (dip >= da && dip <= db) {
-        const va = Number(a.volume_liters);
-        const vb = Number(b.volume_liters);
-        const frac = (dip - da) / (db - da || 1);
-        return va + frac * (vb - va);
-      }
-    }
-    return null;
-  };
-
   const computed = useMemo(() => {
     return compartments.map((c) => {
       const tankerQty = Number(c.tanker_qty || 0);
@@ -94,8 +75,8 @@ export default function TankerUnloading() {
       const dipAfter = Number(c.dip_after_mm);
       const tank = tanks.find((t) => t.name === c.tank_name);
       const points = tank ? calCache[String(tank.id)] || [] : [];
-      const vBefore = interp(points, dipBefore);
-      const vAfter = interp(points, dipAfter);
+      const vBefore = interpolateVolume(points, dipBefore);
+      const vAfter = interpolateVolume(points, dipAfter);
       const received = vBefore == null || vAfter == null ? null : vAfter - vBefore;
       const variance = received == null ? null : received - tankerQty;
       return { vBefore, vAfter, received, variance };

@@ -694,9 +694,9 @@ async function handleDailySalesImport(req, res) {
         g.testing_volumes.push({ nozzle_name: nozzleName, volume: tv, remarks: optionalText(row.testing_remarks) });
       }
     }
-    if (row.cash_amount != null && row.cash_amount !== '') g.cash_amount = Number(row.cash_amount) || 0;
-    if (row.online_amount != null && row.online_amount !== '') g.online_amount = Number(row.online_amount) || 0;
-    if (row.credit_amount != null && row.credit_amount !== '') g.credit_amount = Number(row.credit_amount) || 0;
+    if (row.cash_amount != null && row.cash_amount !== '' && !g.cash_amount) g.cash_amount = Number(row.cash_amount) || 0;
+    if (row.online_amount != null && row.online_amount !== '' && !g.online_amount) g.online_amount = Number(row.online_amount) || 0;
+    if (row.credit_amount != null && row.credit_amount !== '' && !g.credit_amount) g.credit_amount = Number(row.credit_amount) || 0;
   }
   let ok = 0;
   let fail = 0;

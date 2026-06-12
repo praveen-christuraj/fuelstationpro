@@ -13,7 +13,10 @@ export async function apiGet<T = any>(path: string): Promise<T> {
   const res = await fetch(path, {
     headers: await getAuthHeaders(),
   });
-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.message || e.error || `GET ${path} failed: ${res.status}`);
+  }
   return res.json();
 }
 

@@ -74,6 +74,7 @@ export default function App() {
           <Route path="/docs/backend" element={<P><Backend /></P>} />
           <Route path="/docs/android" element={<P><Android /></P>} />
           <Route path="/docs/testing" element={<P><Testing /></P>} />
+          <Route path="*" element={<P><div className="flex flex-col items-center justify-center py-24"><h1 className="text-4xl font-bold text-slate-300">404</h1><p className="text-slate-500 mt-2">Page not found</p></div></P>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
