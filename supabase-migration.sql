@@ -1,6 +1,6 @@
--- FUELFLOW COMPLETE SCHEMA
--- Run this entire script in Supabase SQL Editor.
--- Uses IF NOT EXISTS so it's safe to run multiple times.
+-- FUELFLOW COMPLETE SCHEMA — SAFE TO RE-RUN
+-- Uses CREATE TABLE IF NOT EXISTS for new tables
+-- Uses ALTER TABLE ... ADD COLUMN IF NOT EXISTS for columns on existing tables
 
 -- 1. products
 CREATE TABLE IF NOT EXISTS products (
@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS products (
   active boolean default true,
   created_at timestamptz default now()
 );
+ALTER TABLE products ADD COLUMN IF NOT EXISTS code text;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS category text;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS density numeric(8,4);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS active boolean default true;
+ALTER TABLE products DROP COLUMN IF EXISTS is_active;
 
 -- 2. price_history
 CREATE TABLE IF NOT EXISTS price_history (
@@ -25,6 +30,10 @@ CREATE TABLE IF NOT EXISTS price_history (
   changed_by text,
   created_at timestamptz default now()
 );
+ALTER TABLE price_history ADD COLUMN IF NOT EXISTS old_price numeric(12,2);
+ALTER TABLE price_history ADD COLUMN IF NOT EXISTS new_price numeric(12,2);
+ALTER TABLE price_history ADD COLUMN IF NOT EXISTS changed_by text;
+ALTER TABLE price_history DROP COLUMN IF EXISTS price;
 
 -- 3. tanks
 CREATE TABLE IF NOT EXISTS tanks (
@@ -38,6 +47,9 @@ CREATE TABLE IF NOT EXISTS tanks (
   diameter numeric(8,2) default 0,
   created_at timestamptz default now()
 );
+ALTER TABLE tanks ADD COLUMN IF NOT EXISTS code text;
+ALTER TABLE tanks ADD COLUMN IF NOT EXISTS dead_stock numeric(12,2) default 0;
+ALTER TABLE tanks ADD COLUMN IF NOT EXISTS diameter numeric(8,2) default 0;
 
 -- 4. tank_calibration
 CREATE TABLE IF NOT EXISTS tank_calibration (
@@ -48,7 +60,12 @@ CREATE TABLE IF NOT EXISTS tank_calibration (
   created_at timestamptz default now(),
   unique (tank_id, dip_mm)
 );
-create index if not exists idx_tank_calibration_tank_dip on tank_calibration (tank_id, dip_mm);
+ALTER TABLE tank_calibration ADD COLUMN IF NOT EXISTS dip_mm numeric(10,2);
+UPDATE tank_calibration SET dip_mm = dip_cm * 10 WHERE dip_mm IS NULL AND dip_cm IS NOT NULL;
+ALTER TABLE tank_calibration DROP CONSTRAINT IF EXISTS tank_calibration_tank_id_dip_cm_key;
+CREATE INDEX IF NOT EXISTS idx_tank_calibration_tank_dip on tank_calibration (tank_id, dip_mm);
+-- After confirming dip_mm has data, uncomment:
+-- ALTER TABLE tank_calibration DROP COLUMN IF EXISTS dip_cm;
 
 -- 5. dispensers
 CREATE TABLE IF NOT EXISTS dispensers (
@@ -60,6 +77,12 @@ CREATE TABLE IF NOT EXISTS dispensers (
   status text default 'Operational',
   created_at timestamptz default now()
 );
+ALTER TABLE dispensers ADD COLUMN IF NOT EXISTS code text;
+ALTER TABLE dispensers ADD COLUMN IF NOT EXISTS make text;
+ALTER TABLE dispensers ADD COLUMN IF NOT EXISTS num_nozzles integer;
+ALTER TABLE dispensers ADD COLUMN IF NOT EXISTS status text default 'Operational';
+ALTER TABLE dispensers DROP COLUMN IF EXISTS model;
+ALTER TABLE dispensers DROP COLUMN IF EXISTS is_active;
 
 -- 6. nozzles
 CREATE TABLE IF NOT EXISTS nozzles (
@@ -72,6 +95,10 @@ CREATE TABLE IF NOT EXISTS nozzles (
   status text default 'Active',
   created_at timestamptz default now()
 );
+ALTER TABLE nozzles ADD COLUMN IF NOT EXISTS code text;
+ALTER TABLE nozzles ADD COLUMN IF NOT EXISTS tank_name text;
+ALTER TABLE nozzles ADD COLUMN IF NOT EXISTS status text default 'Active';
+ALTER TABLE nozzles DROP COLUMN IF EXISTS is_active;
 
 -- 7. meters
 CREATE TABLE IF NOT EXISTS meters (
@@ -83,6 +110,13 @@ CREATE TABLE IF NOT EXISTS meters (
   unit text default 'Litre',
   created_at timestamptz default now()
 );
+ALTER TABLE meters ADD COLUMN IF NOT EXISTS nozzle_name text;
+ALTER TABLE meters ADD COLUMN IF NOT EXISTS serial_no text;
+ALTER TABLE meters ADD COLUMN IF NOT EXISTS opening_reading numeric(12,2) default 0;
+ALTER TABLE meters ADD COLUMN IF NOT EXISTS current_reading numeric(12,2) default 0;
+ALTER TABLE meters ADD COLUMN IF NOT EXISTS unit text default 'Litre';
+ALTER TABLE meters DROP COLUMN IF EXISTS name;
+ALTER TABLE meters DROP COLUMN IF EXISTS product_name;
 
 -- 8. operators
 CREATE TABLE IF NOT EXISTS operators (
@@ -94,6 +128,10 @@ CREATE TABLE IF NOT EXISTS operators (
   active boolean default true,
   created_at timestamptz default now()
 );
+ALTER TABLE operators ADD COLUMN IF NOT EXISTS emp_code text;
+ALTER TABLE operators ADD COLUMN IF NOT EXISTS role text;
+ALTER TABLE operators ADD COLUMN IF NOT EXISTS active boolean default true;
+ALTER TABLE operators DROP COLUMN IF EXISTS is_active;
 
 -- 9. shifts
 CREATE TABLE IF NOT EXISTS shifts (
@@ -104,6 +142,7 @@ CREATE TABLE IF NOT EXISTS shifts (
   description text,
   created_at timestamptz default now()
 );
+ALTER TABLE shifts ADD COLUMN IF NOT EXISTS description text;
 
 -- 10. bank_accounts
 CREATE TABLE IF NOT EXISTS bank_accounts (
@@ -115,6 +154,14 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
   balance numeric(14,2) default 0,
   created_at timestamptz default now()
 );
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS account_name text;
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS account_no text;
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS ifsc text;
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS balance numeric(14,2) default 0;
+ALTER TABLE bank_accounts DROP COLUMN IF EXISTS account_number;
+ALTER TABLE bank_accounts DROP COLUMN IF EXISTS ifsc_code;
+ALTER TABLE bank_accounts DROP COLUMN IF EXISTS branch;
+ALTER TABLE bank_accounts DROP COLUMN IF EXISTS is_active;
 
 -- 11. suppliers
 CREATE TABLE IF NOT EXISTS suppliers (
@@ -127,6 +174,10 @@ CREATE TABLE IF NOT EXISTS suppliers (
   products text,
   created_at timestamptz default now()
 );
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS email text;
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS gst_no text;
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS products text;
+ALTER TABLE suppliers DROP COLUMN IF EXISTS is_active;
 
 -- 12. tanker_unloading
 CREATE TABLE IF NOT EXISTS tanker_unloading (
@@ -196,3 +247,119 @@ CREATE TABLE IF NOT EXISTS finance_transactions (
   reference text,
   created_at timestamptz default now()
 );
+
+-- 17. tanker_unloading_headers
+CREATE TABLE IF NOT EXISTS tanker_unloading_headers (
+  id bigint primary key generated always as identity,
+  unload_date date not null,
+  tanker_number text not null,
+  supplier_name text,
+  waybill_no text,
+  invoice_no text,
+  temperature numeric(6,2),
+  created_at timestamptz default now()
+);
+create index if not exists idx_tanker_unloading_headers_date on tanker_unloading_headers (unload_date desc);
+
+-- 18. tanker_unloading_lines
+CREATE TABLE IF NOT EXISTS tanker_unloading_lines (
+  id bigint primary key generated always as identity,
+  header_id bigint not null references tanker_unloading_headers(id) on delete cascade,
+  product_name text not null,
+  tank_name text not null,
+  tanker_qty numeric(12,2) not null check (tanker_qty >= 0),
+  dip_before_mm numeric(10,2) check (dip_before_mm >= 0),
+  dip_after_mm numeric(10,2) check (dip_after_mm >= 0),
+  volume_before_liters numeric(12,2) check (volume_before_liters >= 0),
+  volume_after_liters numeric(12,2) check (volume_after_liters >= 0),
+  received_volume numeric(12,2),
+  variance numeric(12,2),
+  created_at timestamptz default now()
+);
+create index if not exists idx_tanker_unloading_lines_header on tanker_unloading_lines (header_id);
+create index if not exists idx_tanker_unloading_lines_tank on tanker_unloading_lines (tank_name);
+create index if not exists idx_tanker_unloading_lines_product on tanker_unloading_lines (product_name);
+
+-- 19. daily_sales_entries
+CREATE TABLE IF NOT EXISTS daily_sales_entries (
+  id bigint primary key generated always as identity,
+  sale_date date not null,
+  shift_name text not null,
+  operator_name text not null,
+  cash_amount numeric(14,2) default 0,
+  online_amount numeric(14,2) default 0,
+  credit_amount numeric(14,2) default 0,
+  total_submitted numeric(14,2) default 0,
+  total_sales_amount numeric(14,2) default 0,
+  variance numeric(14,2) default 0,
+  status text default 'submitted',
+  created_at timestamptz default now()
+);
+create index if not exists idx_daily_sales_entries_date on daily_sales_entries (sale_date desc);
+
+-- 20. daily_sales_nozzle_readings
+CREATE TABLE IF NOT EXISTS daily_sales_nozzle_readings (
+  id bigint primary key generated always as identity,
+  sales_entry_id bigint not null references daily_sales_entries(id) on delete cascade,
+  nozzle_name text not null,
+  dispenser_name text,
+  tank_name text,
+  product_name text not null,
+  opening_reading numeric(12,2) default 0,
+  closing_reading numeric(12,2) default 0,
+  volume numeric(12,2) default 0,
+  unit_price numeric(12,2) default 0,
+  amount numeric(14,2) default 0,
+  created_at timestamptz default now()
+);
+create index if not exists idx_daily_sales_nozzle_readings_entry on daily_sales_nozzle_readings (sales_entry_id);
+create index if not exists idx_daily_sales_nozzle_readings_date on daily_sales_nozzle_readings (created_at desc);
+
+-- 21. daily_sales_testing
+CREATE TABLE IF NOT EXISTS daily_sales_testing (
+  id bigint primary key generated always as identity,
+  sales_entry_id bigint not null references daily_sales_entries(id) on delete cascade,
+  nozzle_name text,
+  tank_name text,
+  product_name text not null,
+  volume numeric(12,2) default 0,
+  unit_price numeric(12,2) default 0,
+  amount numeric(14,2) default 0,
+  remarks text,
+  created_at timestamptz default now()
+);
+ALTER TABLE daily_sales_testing ADD COLUMN IF NOT EXISTS unit_price numeric(12,2) default 0;
+ALTER TABLE daily_sales_testing ADD COLUMN IF NOT EXISTS amount numeric(14,2) default 0;
+create index if not exists idx_daily_sales_testing_entry on daily_sales_testing (sales_entry_id);
+
+-- 22. buffer_tanks
+CREATE TABLE IF NOT EXISTS buffer_tanks (
+  id bigint primary key generated always as identity,
+  product_name text not null unique,
+  volume numeric(12,2) default 0,
+  updated_at timestamptz default now()
+);
+
+-- 23. dip_readings
+CREATE TABLE IF NOT EXISTS dip_readings (
+  id bigint primary key generated always as identity,
+  reading_date date not null,
+  tank_name text not null,
+  dip_mm numeric(10,2) not null check (dip_mm >= 0),
+  volume_liters numeric(12,2) not null check (volume_liters >= 0),
+  reading_type text not null,
+  created_at timestamptz default now()
+);
+create index if not exists idx_dip_readings_date on dip_readings (reading_date desc);
+create index if not exists idx_dip_readings_tank on dip_readings (tank_name);
+
+-- 24. cash_deposits
+CREATE TABLE IF NOT EXISTS cash_deposits (
+  id bigint primary key generated always as identity,
+  deposit_date date not null,
+  bank_account_id bigint references bank_accounts(id),
+  amount numeric(14,2) not null check (amount >= 0),
+  reference text,
+  created_at timestamptz default now()
+);
+create index if not exists idx_cash_deposits_date on cash_deposits (deposit_date desc);

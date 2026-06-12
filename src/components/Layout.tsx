@@ -22,6 +22,7 @@ const groups: NavGroup[] = [
   ]},
   { label: 'Operations', icon: Truck, items: [
     { to: '/ops/tanker-unloading', label: 'Tanker Unloading', icon: Truck },
+    { to: '/ops/dip-readings', label: 'Dip Readings', icon: Database },
     { to: '/ops/dip-volume', label: 'Dip-to-Volume', icon: Database },
     { to: '/ops/stock', label: 'Stock In / Out', icon: Boxes },
     { to: '/ops/sales', label: 'Daily Sales Entry', icon: ClipboardList },
@@ -34,8 +35,12 @@ const groups: NavGroup[] = [
   { label: 'Reports', icon: BarChart3, items: [ { to: '/reports', label: 'Advanced Reports', icon: BarChart3 } ] },
   { label: 'Bulk Upload', icon: Upload, items: [
     { to: '/bulk/sales', label: 'Sales Upload', icon: Upload },
+    { to: '/bulk/daily-sales', label: 'Daily Sales Upload', icon: Upload },
     { to: '/bulk/tank-data', label: 'Tank Data Upload', icon: Upload },
+    { to: '/bulk/calibration', label: 'Calibration Upload', icon: Upload },
+    { to: '/bulk/dip-readings', label: 'Dip Readings Upload', icon: Upload },
     { to: '/bulk/inventory', label: 'Inventory Upload', icon: Upload },
+    { to: '/bulk/credit-sales', label: 'Credit Sales Upload', icon: Upload },
   ]},
   { label: 'Documentation', icon: BookOpen, items: [
     { to: '/docs/project-plan', label: 'Project Plan', icon: FileText },

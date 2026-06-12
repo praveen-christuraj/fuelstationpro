@@ -9,17 +9,60 @@ import { toCSV, downloadCSV } from '../lib/csv';
 type Period = 'daily' | 'monthly' | 'quarterly' | 'yearly';
 
 export default function Reports() {
-  const [sales, setSales] = useState<any[]>([]);
+  const [dailySales, setDailySales] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [period, setPeriod] = useState<Period>('monthly');
   const [productFilter, setProductFilter] = useState('all');
 
-  const load = async () => { setLoading(true); setError(''); try { setSales(await apiGet('/api/sales')); } catch (e: any) { setError(e.message); } finally { setLoading(false); } };
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      setDailySales(await apiGet('/api/daily-sales'));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
   useEffect(() => { load(); }, []);
 
-  const products = useMemo(() => Array.from(new Set(sales.map((s) => s.product_name))).filter(Boolean), [sales]);
-  const filtered = useMemo(() => productFilter === 'all' ? sales : sales.filter((s) => s.product_name === productFilter), [sales, productFilter]);
+  const products = useMemo(() => {
+    const set = new Set<string>();
+    (dailySales || []).forEach((e) => {
+      (e.daily_sales_nozzle_readings || []).forEach((r: any) => { if (r.product_name) set.add(r.product_name); });
+      (e.daily_sales_testing || []).forEach((t: any) => { if (t.product_name) set.add(t.product_name); });
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [dailySales]);
+
+  const derived = useMemo(() => {
+    return (dailySales || []).map((e) => {
+      const soldByProduct: Record<string, { volume: number; amount: number }> = {};
+      const testByProduct: Record<string, { volume: number; amount: number }> = {};
+      (e.daily_sales_nozzle_readings || []).forEach((r: any) => {
+        const k = r.product_name || 'Other';
+        soldByProduct[k] = soldByProduct[k] || { volume: 0, amount: 0 };
+        soldByProduct[k].volume += Number(r.volume || 0);
+        soldByProduct[k].amount += Number(r.amount || 0);
+      });
+      (e.daily_sales_testing || []).forEach((t: any) => {
+        const k = t.product_name || 'Other';
+        testByProduct[k] = testByProduct[k] || { volume: 0, amount: 0 };
+        testByProduct[k].volume += Number(t.volume || 0);
+        testByProduct[k].amount += Number(t.amount || 0);
+      });
+      const netByProduct: Record<string, { volume: number; amount: number }> = {};
+      Object.keys({ ...soldByProduct, ...testByProduct }).forEach((k) => {
+        const sold = soldByProduct[k] || { volume: 0, amount: 0 };
+        const test = testByProduct[k] || { volume: 0, amount: 0 };
+        netByProduct[k] = { volume: Math.max(0, sold.volume - test.volume), amount: sold.amount - test.amount };
+      });
+      const netVolumeTotal = Object.values(netByProduct).reduce((s, v) => s + Number(v.volume || 0), 0);
+      return { entry: e, netByProduct, netVolumeTotal };
+    });
+  }, [dailySales]);
 
   const bucketKey = (d: string) => {
     const date = new Date(d);
@@ -31,16 +74,36 @@ export default function Reports() {
 
   const grouped = useMemo(() => {
     const m: Record<string, { amount: number; volume: number; count: number }> = {};
-    filtered.forEach((s) => { const k = bucketKey(s.sale_date || ''); m[k] = m[k] || { amount: 0, volume: 0, count: 0 }; m[k].amount += Number(s.total_amount || 0); m[k].volume += Number(s.sale_volume || 0); m[k].count++; });
+    if (productFilter === 'all') {
+      derived.forEach((d) => {
+        const e = d.entry;
+        const k = bucketKey(e.sale_date || '');
+        m[k] = m[k] || { amount: 0, volume: 0, count: 0 };
+        m[k].amount += Number(e.total_sales_amount || 0);
+        m[k].volume += Number(d.netVolumeTotal || 0);
+        m[k].count++;
+      });
+    } else {
+      derived.forEach((d) => {
+        const e = d.entry;
+        const net = d.netByProduct[productFilter];
+        if (!net) return;
+        const k = bucketKey(e.sale_date || '');
+        m[k] = m[k] || { amount: 0, volume: 0, count: 0 };
+        m[k].amount += Number(net.amount || 0);
+        m[k].volume += Number(net.volume || 0);
+        m[k].count++;
+      });
+    }
     return Object.entries(m).sort().map(([period, v]) => ({ period, ...v }));
-  }, [filtered, period]);
+  }, [derived, period, productFilter]);
 
   const revenueSeries = grouped.slice(-12).map((g) => ({ label: g.period.slice(-7), value: Math.round(g.amount) }));
   const volumeBars = grouped.slice(-12).map((g) => ({ label: g.period.slice(-7), value: Math.round(g.volume) }));
   const totalRev = grouped.reduce((s, g) => s + g.amount, 0);
   const totalVol = grouped.reduce((s, g) => s + g.volume, 0);
 
-  const exportReport = () => downloadCSV(`report_${period}.csv`, toCSV(grouped.map((g) => ({ period: g.period, revenue: g.amount.toFixed(2), volume_liters: g.volume.toFixed(2), transactions: g.count }))));
+  const exportReport = () => downloadCSV(`report_${period}.csv`, toCSV(grouped.map((g) => ({ period: g.period, revenue: g.amount.toFixed(2), volume_liters: g.volume.toFixed(2), entries: g.count }))));
 
   if (loading) return <Loading />;
   if (error) return <ErrorState message={error} onRetry={load} />;
@@ -69,7 +132,7 @@ export default function Reports() {
       </div>
       <Card>
         <CardHeader title="Period Breakdown" />
-        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-xs font-semibold text-slate-500 uppercase border-b border-slate-100 bg-slate-50/50"><th className="px-5 py-3">Period</th><th className="px-5 py-3 text-right">Revenue</th><th className="px-5 py-3 text-right">Volume (L)</th><th className="px-5 py-3 text-right">Transactions</th></tr></thead><tbody className="divide-y divide-slate-50">{grouped.slice().reverse().map((g) => <tr key={g.period} className="hover:bg-slate-50/60"><td className="px-5 py-3 font-medium text-slate-700">{g.period}</td><td className="px-5 py-3 text-right text-slate-700">{fmtMoney(g.amount)}</td><td className="px-5 py-3 text-right text-slate-600">{fmtNum(g.volume, 0)}</td><td className="px-5 py-3 text-right text-slate-600">{g.count}</td></tr>)}{grouped.length === 0 && <tr><td colSpan={4} className="px-5 py-10 text-center text-slate-400">No sales data</td></tr>}</tbody></table></div>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-xs font-semibold text-slate-500 uppercase border-b border-slate-100 bg-slate-50/50"><th className="px-5 py-3">Period</th><th className="px-5 py-3 text-right">Revenue</th><th className="px-5 py-3 text-right">Volume (L)</th><th className="px-5 py-3 text-right">Entries</th></tr></thead><tbody className="divide-y divide-slate-50">{grouped.slice().reverse().map((g) => <tr key={g.period} className="hover:bg-slate-50/60"><td className="px-5 py-3 font-medium text-slate-700">{g.period}</td><td className="px-5 py-3 text-right text-slate-700">{fmtMoney(g.amount)}</td><td className="px-5 py-3 text-right text-slate-600">{fmtNum(g.volume, 0)}</td><td className="px-5 py-3 text-right text-slate-600">{g.count}</td></tr>)}{grouped.length === 0 && <tr><td colSpan={4} className="px-5 py-10 text-center text-slate-400">No sales data</td></tr>}</tbody></table></div>
       </Card>
     </div>
   );

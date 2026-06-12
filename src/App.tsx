@@ -16,6 +16,7 @@ import BankAccounts from './pages/master/BankAccounts';
 import Suppliers from './pages/master/Suppliers';
 import TankerUnloading from './pages/ops/TankerUnloading';
 import DipVolume from './pages/ops/DipVolume';
+import DipReadings from './pages/ops/DipReadings';
 import Stock from './pages/ops/Stock';
 import Sales from './pages/ops/Sales';
 import LossGain from './pages/ops/LossGain';
@@ -25,6 +26,10 @@ import Reports from './pages/Reports';
 import SalesUpload from './pages/bulk/SalesUpload';
 import TankDataUpload from './pages/bulk/TankDataUpload';
 import InventoryUpload from './pages/bulk/InventoryUpload';
+import DailySalesUpload from './pages/bulk/DailySalesUpload';
+import DipReadingsUpload from './pages/bulk/DipReadingsUpload';
+import CalibrationUpload from './pages/bulk/CalibrationUpload';
+import CreditSalesUpload from './pages/bulk/CreditSalesUpload';
 import ProjectPlan from './pages/docs/ProjectPlan';
 import Backend from './pages/docs/Backend';
 import Android from './pages/docs/Android';
@@ -51,6 +56,7 @@ export default function App() {
           <Route path="/master/suppliers" element={<P><Suppliers /></P>} />
           <Route path="/ops/tanker-unloading" element={<P><TankerUnloading /></P>} />
           <Route path="/ops/dip-volume" element={<P><DipVolume /></P>} />
+          <Route path="/ops/dip-readings" element={<P><DipReadings /></P>} />
           <Route path="/ops/stock" element={<P><Stock /></P>} />
           <Route path="/ops/sales" element={<P><Sales /></P>} />
           <Route path="/ops/loss-gain" element={<P><LossGain /></P>} />
@@ -60,6 +66,10 @@ export default function App() {
           <Route path="/bulk/sales" element={<P><SalesUpload /></P>} />
           <Route path="/bulk/tank-data" element={<P><TankDataUpload /></P>} />
           <Route path="/bulk/inventory" element={<P><InventoryUpload /></P>} />
+          <Route path="/bulk/daily-sales" element={<P><DailySalesUpload /></P>} />
+          <Route path="/bulk/dip-readings" element={<P><DipReadingsUpload /></P>} />
+          <Route path="/bulk/calibration" element={<P><CalibrationUpload /></P>} />
+          <Route path="/bulk/credit-sales" element={<P><CreditSalesUpload /></P>} />
           <Route path="/docs/project-plan" element={<P><ProjectPlan /></P>} />
           <Route path="/docs/backend" element={<P><Backend /></P>} />
           <Route path="/docs/android" element={<P><Android /></P>} />

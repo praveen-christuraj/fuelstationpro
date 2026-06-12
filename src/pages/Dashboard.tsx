@@ -11,19 +11,27 @@ const COLORS = ['#2563eb', '#16a34a', '#f59e0b', '#8b5cf6', '#ec4899'];
 export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [sales, setSales] = useState<any[]>([]);
+  const [dailySales, setDailySales] = useState<any[]>([]);
   const [tanks, setTanks] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [credit, setCredit] = useState<any[]>([]);
-  const [unload, setUnload] = useState<any[]>([]);
+  const [unloadBatches, setUnloadBatches] = useState<any[]>([]);
 
   const load = async () => {
     setLoading(true); setError('');
     try {
-      const [s, t, p, c, u] = await Promise.all([
-        apiGet('/api/sales'), apiGet('/api/tanks'), apiGet('/api/products'), apiGet('/api/credit-sales'), apiGet('/api/tanker-unloading'),
+      const [ds, t, p, c, u] = await Promise.all([
+        apiGet('/api/daily-sales'),
+        apiGet('/api/tanks'),
+        apiGet('/api/products'),
+        apiGet('/api/credit-sales'),
+        apiGet('/api/tanker-unloading/batches'),
       ]);
-      setSales(s); setTanks(t); setProducts(p); setCredit(c); setUnload(u);
+      setDailySales(ds || []);
+      setTanks(t || []);
+      setProducts(p || []);
+      setCredit(c || []);
+      setUnloadBatches(u || []);
     } catch (e: any) { setError(e.message || 'Failed to load dashboard'); }
     finally { setLoading(false); }
   };
@@ -32,14 +40,26 @@ export default function Dashboard() {
   if (loading) return <Loading label="Loading dashboard…" />;
   if (error) return <ErrorState message={error} onRetry={load} />;
 
-  const totalSalesAmt = sales.reduce((s, x) => s + Number(x.total_amount || 0), 0);
+  const totalSalesAmt = dailySales.reduce((s, x) => s + Number(x.total_sales_amount || 0), 0);
   const totalCredit = credit.filter((c) => c.status !== 'Paid').reduce((s, x) => s + Number(x.amount || 0), 0);
-  const totalLossGain = sales.reduce((s, x) => s + Number(x.loss_gain || 0), 0);
+  const salesSubmittedVariance = dailySales.reduce((s, x) => s + Number(x.variance || 0), 0);
 
-  const volumeByProduct: Record<string, number> = {};
-  sales.forEach((s) => {
-    const key = s.product_name || 'Other';
-    volumeByProduct[key] = (volumeByProduct[key] || 0) + Number(s.sale_volume || 0);
+  const soldByProduct: Record<string, number> = {};
+  const testingByProduct: Record<string, number> = {};
+  dailySales.forEach((e) => {
+    (e.daily_sales_nozzle_readings || []).forEach((r: any) => {
+      const key = r.product_name || 'Other';
+      soldByProduct[key] = (soldByProduct[key] || 0) + Number(r.volume || 0);
+    });
+    (e.daily_sales_testing || []).forEach((t: any) => {
+      const key = t.product_name || 'Other';
+      testingByProduct[key] = (testingByProduct[key] || 0) + Number(t.volume || 0);
+    });
+  });
+
+  const netSoldByProduct: Record<string, number> = {};
+  Object.keys({ ...soldByProduct, ...testingByProduct }).forEach((k) => {
+    netSoldByProduct[k] = Math.max(0, Number(soldByProduct[k] || 0) - Number(testingByProduct[k] || 0));
   });
 
   const stockByProduct: Record<string, number> = {};
@@ -67,22 +87,25 @@ export default function Dashboard() {
 
   // sales by date (last 7 distinct)
   const byDate: Record<string, number> = {};
-  sales.forEach((s) => { const d = (s.sale_date || '').slice(0, 10); byDate[d] = (byDate[d] || 0) + Number(s.total_amount || 0); });
+  dailySales.forEach((s) => { const d = (s.sale_date || '').slice(0, 10); byDate[d] = (byDate[d] || 0) + Number(s.total_sales_amount || 0); });
   const dateSeries = Object.entries(byDate).sort().slice(-7).map(([d, v]) => ({ label: fmtDate(d).slice(0, 6), value: Math.round(v) }));
 
   // sales by product
-  const byProduct: Record<string, number> = {};
-  sales.forEach((s) => { byProduct[s.product_name || 'Other'] = (byProduct[s.product_name || 'Other'] || 0) + Number(s.sale_volume || 0); });
-  const prodDonut = Object.entries(byProduct).map(([label, value], i) => ({ label, value: Math.round(value), color: COLORS[i % COLORS.length] }));
+  const prodDonut = Object.entries(netSoldByProduct).map(([label, value], i) => ({ label, value: Math.round(value), color: COLORS[i % COLORS.length] }));
 
   // volume by shift
   const byShift: Record<string, number> = {};
-  sales.forEach((s) => { byShift[s.shift_name || 'Shift'] = (byShift[s.shift_name || 'Shift'] || 0) + Number(s.sale_volume || 0); });
+  dailySales.forEach((s) => {
+    const key = s.shift_name || 'Shift';
+    const sold = (s.daily_sales_nozzle_readings || []).reduce((acc: number, r: any) => acc + Number(r.volume || 0), 0);
+    const test = (s.daily_sales_testing || []).reduce((acc: number, r: any) => acc + Number(r.volume || 0), 0);
+    byShift[key] = (byShift[key] || 0) + Math.max(0, sold - test);
+  });
   const shiftBars = Object.entries(byShift).map(([label, value]) => ({ label, value: Math.round(value) }));
 
   const kpis: { label: string; value: ReactNode; icon: typeof Wallet; color: string }[] = [
     { label: 'Total Sales', value: <div className="text-2xl font-bold text-slate-800">{totalSalesAmt ? fmtMoney(totalSalesAmt) : '₹0.00'}</div>, icon: Wallet, color: 'blue' },
-    { label: 'Volume Dispensed', value: renderProductLines(volumeByProduct, 'No sales'), icon: Droplet, color: 'emerald' },
+    { label: 'Volume Sold', value: renderProductLines(netSoldByProduct, 'No sales'), icon: Droplet, color: 'emerald' },
     { label: 'Current Stock', value: renderProductLines(stockByProduct, 'No stock'), icon: Boxes, color: 'violet' },
     { label: 'Outstanding Credit', value: <div className="text-2xl font-bold text-slate-800">{totalCredit ? fmtMoney(totalCredit) : '₹0.00'}</div>, icon: AlertTriangle, color: 'amber' },
   ];
@@ -144,13 +167,13 @@ export default function Dashboard() {
           <CardHeader title="Loss / Gain Summary" subtitle="Net variance" />
           <div className="p-5">
             <div className="text-center py-2">
-              <div className={`text-3xl font-bold ${totalLossGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{totalLossGain >= 0 ? '+' : ''}{fmtNum(totalLossGain, 1)} L</div>
-              <p className="text-xs text-slate-400 mt-1">Cumulative meter vs book variance</p>
+              <div className={`text-3xl font-bold ${salesSubmittedVariance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{salesSubmittedVariance >= 0 ? '+' : ''}{fmtMoney(salesSubmittedVariance)}</div>
+              <p className="text-xs text-slate-400 mt-1">Sales amount vs operator submitted amount</p>
             </div>
             <div className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-slate-500">Tankers Received</span><span className="font-medium text-slate-700">{unload.length}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Tankers Received</span><span className="font-medium text-slate-700">{unloadBatches.length}</span></div>
               <div className="flex justify-between"><span className="text-slate-500">Products Tracked</span><span className="font-medium text-slate-700">{products.length}</span></div>
-              <div className="flex justify-between"><span className="text-slate-500">Sales Records</span><span className="font-medium text-slate-700">{sales.length}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Sales Entries</span><span className="font-medium text-slate-700">{dailySales.length}</span></div>
             </div>
           </div>
         </Card>
@@ -160,19 +183,20 @@ export default function Dashboard() {
         <CardHeader title="Recent Sales Activity" subtitle="Latest shift entries" action={<a href="/ops/sales" className="text-xs text-blue-600 hover:underline inline-flex items-center gap-0.5">View all <ArrowUpRight className="w-3 h-3" /></a>} />
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead><tr className="text-left text-xs font-semibold text-slate-500 uppercase border-b border-slate-100 bg-slate-50/50"><th className="px-5 py-3">Date</th><th className="px-5 py-3">Product</th><th className="px-5 py-3">Operator</th><th className="px-5 py-3">Shift</th><th className="px-5 py-3 text-right">Volume</th><th className="px-5 py-3 text-right">Amount</th></tr></thead>
+            <thead><tr className="text-left text-xs font-semibold text-slate-500 uppercase border-b border-slate-100 bg-slate-50/50"><th className="px-5 py-3">Date</th><th className="px-5 py-3">Shift</th><th className="px-5 py-3">Operator</th><th className="px-5 py-3 text-right">Amount</th><th className="px-5 py-3 text-right">Variance</th></tr></thead>
             <tbody className="divide-y divide-slate-50">
-              {sales.slice(0, 6).map((s) => (
+              {dailySales.slice(0, 6).map((s) => (
                 <tr key={s.id} className="hover:bg-slate-50/60">
                   <td className="px-5 py-3 text-slate-600">{fmtDate(s.sale_date)}</td>
-                  <td className="px-5 py-3"><span className="inline-flex items-center gap-1.5"><Fuel className="w-3.5 h-3.5 text-blue-500" />{s.product_name}</span></td>
-                  <td className="px-5 py-3 text-slate-600">{s.operator_name}</td>
                   <td className="px-5 py-3"><Badge color="blue">{s.shift_name}</Badge></td>
-                  <td className="px-5 py-3 text-right text-slate-700">{fmtNum(s.sale_volume, 1)} L</td>
-                  <td className="px-5 py-3 text-right font-medium text-slate-800">{fmtMoney(s.total_amount)}</td>
+                  <td className="px-5 py-3 text-slate-600">{s.operator_name}</td>
+                  <td className="px-5 py-3 text-right font-medium text-slate-800">{fmtMoney(s.total_sales_amount)}</td>
+                  <td className="px-5 py-3 text-right">
+                    <span className={`font-semibold ${Number(s.variance || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{Number(s.variance || 0) >= 0 ? '+' : ''}{fmtMoney(s.variance)}</span>
+                  </td>
                 </tr>
               ))}
-              {sales.length === 0 && <tr><td colSpan={6} className="px-5 py-10 text-center text-slate-400 text-sm">No sales recorded yet</td></tr>}
+              {dailySales.length === 0 && <tr><td colSpan={5} className="px-5 py-10 text-center text-slate-400 text-sm">No sales recorded yet</td></tr>}
             </tbody>
           </table>
         </div>
