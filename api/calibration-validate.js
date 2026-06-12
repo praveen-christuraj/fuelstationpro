@@ -8,11 +8,11 @@ export function validateChart(points, tankCapacity) {
 
   for (let i = 0; i < points.length; i++) {
     const p = points[i];
-    const dip = Number(p.dip_cm);
+    const dip = Number(p.dip_mm);
     const vol = Number(p.volume_liters);
 
     if (isNaN(dip) || !isFinite(dip) || dip < 0) {
-      errors.push(`Row ${i + 1}: dip_cm must be a non-negative number`);
+      errors.push(`Row ${i + 1}: dip_mm must be a non-negative number`);
     }
     if (isNaN(vol) || !isFinite(vol) || vol < 0) {
       errors.push(`Row ${i + 1}: volume_liters must be a non-negative number`);
@@ -21,24 +21,22 @@ export function validateChart(points, tankCapacity) {
   if (errors.length > 0) return { valid: false, errors };
 
   for (let i = 0; i < points.length; i++) {
-    points[i] = {
-      dip_cm: Number(points[i].dip_cm),
-      volume_liters: Number(points[i].volume_liters),
-    };
+    p.dip_mm = Number(p.dip_mm);
+    p.volume_liters = Number(p.volume_liters);
   }
 
   for (let i = 1; i < points.length; i++) {
-    if (points[i].dip_cm <= points[i - 1].dip_cm) {
-      errors.push(`Row ${i + 1}: dip_cm must be strictly greater than row ${i} (${points[i - 1].dip_cm} >= ${points[i].dip_cm})`);
+    if (points[i].dip_mm <= points[i - 1].dip_mm) {
+      errors.push(`Row ${i + 1}: dip_mm must be strictly greater than row ${i} (${points[i - 1].dip_mm} >= ${points[i].dip_mm})`);
     }
     if (points[i].volume_liters < points[i - 1].volume_liters) {
       errors.push(`Row ${i + 1}: volume_liters must not decrease as dip increases (${points[i - 1].volume_liters} > ${points[i].volume_liters})`);
     }
   }
 
-  const dips = points.map((p) => p.dip_cm);
+  const dips = points.map((p) => p.dip_mm);
   if (new Set(dips).size !== dips.length) {
-    errors.push('Duplicate dip_cm values are not allowed');
+    errors.push('Duplicate dip_mm values are not allowed');
   }
 
   if (tankCapacity != null && points[points.length - 1].volume_liters > tankCapacity * 1.05) {

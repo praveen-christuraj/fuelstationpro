@@ -23,7 +23,7 @@ export default function Finance() {
         { key: 'txn_date', label: 'Date', type: 'date', required: true, render: (r) => fmtDate(r.txn_date) },
         { key: 'txn_type', label: 'Type', type: 'select', required: true, options: [{ value: 'Income', label: 'Income' }, { value: 'Expense', label: 'Expense' }, { value: 'Deposit', label: 'Bank Deposit' }, { value: 'Withdrawal', label: 'Withdrawal' }], render: (r) => <Badge color={['Income', 'Deposit'].includes(r.txn_type) ? 'green' : 'red'}>{r.txn_type}</Badge> },
         { key: 'category', label: 'Category' },
-        { key: 'bank_account', label: 'Bank Account' },
+        { key: 'bank_account', label: 'Bank Account', type: 'select', optionsEndpoint: '/api/bank-accounts' },
         { key: 'amount', label: 'Amount', type: 'number', required: true, render: (r) => fmtMoney(r.amount) },
         { key: 'reference', label: 'Reference / Note' },
       ]} />

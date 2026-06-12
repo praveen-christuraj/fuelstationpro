@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Pencil, Trash2, Search, Download } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, Download, Loader2 } from 'lucide-react';
 import { Card } from './ui/Card';
 import Modal, { ConfirmModal } from './ui/Modal';
 import { Field, Input } from './ui/Field';
@@ -12,10 +12,15 @@ export interface ColumnDef {
   label: string;
   type?: 'text' | 'number' | 'date' | 'select' | 'boolean';
   options?: { value: string | number; label: string }[];
+  optionsEndpoint?: string;
+  optionsLabelKey?: string;
+  optionsValueKey?: string;
   required?: boolean;
   render?: (row: any) => React.ReactNode;
   hideInForm?: boolean;
+  hideInTable?: boolean;
   default?: any;
+  onFieldChange?: (form: any, key: string, value: any, option?: any) => Record<string, any>;
 }
 
 interface Props {
@@ -37,6 +42,8 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
   const [formErr, setFormErr] = useState('');
   const [saving, setSaving] = useState(false);
   const [delTarget, setDelTarget] = useState<any>(null);
+  const [optionsCache, setOptionsCache] = useState<Record<string, any[]>>({});
+  const [loadingOptions, setLoadingOptions] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     setLoading(true); setError('');
@@ -45,6 +52,32 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
     finally { setLoading(false); }
   };
   useEffect(() => { load(); }, [endpoint]);
+
+  useEffect(() => {
+    const dynamicCols = columns.filter((c) => c.optionsEndpoint && !c.options);
+    if (dynamicCols.length === 0) return;
+    dynamicCols.forEach(async (c) => {
+      const ep = c.optionsEndpoint!;
+      if (optionsCache[ep]) return;
+      setLoadingOptions((prev) => ({ ...prev, [ep]: true }));
+      try {
+        const data = await apiGet(ep);
+        setOptionsCache((prev) => ({ ...prev, [ep]: Array.isArray(data) ? data : data?.points || [] }));
+      } catch { setOptionsCache((prev) => ({ ...prev, [ep]: [] })); }
+      finally { setLoadingOptions((prev) => ({ ...prev, [ep]: false })); }
+    });
+  }, [columns, optionsCache]);
+
+  const getOptions = (c: ColumnDef) => {
+    if (c.options) return c.options;
+    if (c.optionsEndpoint) {
+      const data = optionsCache[c.optionsEndpoint] || [];
+      const labelKey = c.optionsLabelKey || 'name';
+      const valueKey = c.optionsValueKey || 'name';
+      return data.map((item: any) => ({ value: item[valueKey] ?? '', label: item[labelKey] ?? '' }));
+    }
+    return [];
+  };
 
   const openCreate = () => {
     const init: Record<string, any> = {};
@@ -86,7 +119,18 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
     catch (e: any) { setError(e.message); }
   };
 
+  const handleFieldChange = (c: ColumnDef, value: any) => {
+    const opts = getOptions(c);
+    const option = opts.find((o) => o.value === value);
+    const updates = { [c.key]: value };
+    if (c.onFieldChange) {
+      Object.assign(updates, c.onFieldChange(form, c.key, value, option));
+    }
+    setForm({ ...form, ...updates });
+  };
+
   const visibleCols = columns.filter((c) => !c.hideInForm || c.key === 'id');
+  const tableCols = columns.filter((c) => !c.hideInTable);
   const filtered = rows.filter((r) =>
     !search || JSON.stringify(r).toLowerCase().includes(search.toLowerCase())
   );
@@ -120,14 +164,14 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide border-b border-slate-100 bg-slate-50/50">
-                  {visibleCols.map((c) => <th key={c.key} className="px-4 py-3 whitespace-nowrap">{c.label}</th>)}
+                  {tableCols.map((c) => <th key={c.key} className="px-4 py-3 whitespace-nowrap">{c.label}</th>)}
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {filtered.map((row) => (
                   <tr key={row.id} className="hover:bg-slate-50/60">
-                    {visibleCols.map((c) => (
+                    {tableCols.map((c) => (
                       <td key={c.key} className="px-4 py-3 text-slate-700 whitespace-nowrap">
                         {c.render ? c.render(row) : (row[c.key] ?? '—')}
                       </td>
@@ -148,25 +192,29 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={`${editing ? 'Edit' : 'Add'} ${entityName}`}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {columns.filter((c) => !c.hideInForm).map((c) => (
-            <div key={c.key} className={c.type === 'boolean' ? 'sm:col-span-2' : ''}>
-              <Field label={c.label} required={c.required}>
-                {c.type === 'select' ? (
-                  <select value={form[c.key] ?? ''} onChange={(e) => setForm({ ...form, [c.key]: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30">
-                    <option value="">Select…</option>
-                    {c.options?.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                ) : c.type === 'boolean' ? (
-                  <label className="inline-flex items-center gap-2 mt-1">
-                    <input type="checkbox" checked={form[c.key] === true || form[c.key] === 'true'} onChange={(e) => setForm({ ...form, [c.key]: e.target.checked })} className="w-4 h-4 rounded text-blue-600" />
-                    <span className="text-sm text-slate-600">Enabled</span>
-                  </label>
-                ) : (
-                  <Input type={c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'} step="any" value={form[c.key] ?? ''} onChange={(e) => setForm({ ...form, [c.key]: e.target.value })} />
-                )}
-              </Field>
-            </div>
-          ))}
+          {columns.filter((c) => !c.hideInForm).map((c) => {
+            const opts = getOptions(c);
+            const isLoading = c.optionsEndpoint && loadingOptions[c.optionsEndpoint];
+            return (
+              <div key={c.key} className={c.type === 'boolean' ? 'sm:col-span-2' : ''}>
+                <Field label={c.label} required={c.required}>
+                  {c.type === 'select' ? (
+                    <select value={form[c.key] ?? ''} onChange={(e) => handleFieldChange(c, e.target.value)} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30">
+                      <option value="">{isLoading ? 'Loading…' : 'Select…'}</option>
+                      {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  ) : c.type === 'boolean' ? (
+                    <label className="inline-flex items-center gap-2 mt-1">
+                      <input type="checkbox" checked={form[c.key] === true || form[c.key] === 'true'} onChange={(e) => setForm({ ...form, [c.key]: e.target.checked })} className="w-4 h-4 rounded text-blue-600" />
+                      <span className="text-sm text-slate-600">Enabled</span>
+                    </label>
+                  ) : (
+                    <Input type={c.type === 'number' ? 'number' : c.type === 'date' ? 'date' : 'text'} step="any" value={form[c.key] ?? ''} onChange={(e) => handleFieldChange(c, e.target.value)} />
+                  )}
+                </Field>
+              </div>
+            );
+          })}
         </div>
         {formErr && <p className="text-sm text-rose-600 mt-3">{formErr}</p>}
         <div className="flex justify-end gap-2 mt-6">

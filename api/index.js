@@ -46,6 +46,9 @@ export default async function handler(req, res) {
     if (parts[0] === 'sales' && req.method === 'POST') {
       return await handleSalesCreate(req, res);
     }
+    if (parts[0] === 'sales' && req.method === 'PUT') {
+      return await handleSalesUpdate(req, res);
+    }
     if (parts[0] === 'stock-movements' && req.method === 'POST') {
       return await handleStockMovementCreate(req, res);
     }
@@ -109,9 +112,9 @@ async function handleCalibration(req, res, tankId) {
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('tank_calibration')
-      .select('id, dip_cm, volume_liters')
+      .select('id, dip_mm, volume_liters')
       .eq('tank_id', tid)
-      .order('dip_cm', { ascending: true });
+      .order('dip_mm', { ascending: true });
     if (error) throw error;
     return res.status(200).json({ tank_id: tid, points: data || [], count: data?.length || 0 });
   }
@@ -123,20 +126,20 @@ async function handleCalibration(req, res, tankId) {
 
     const { data: existingRows, error: existingErr } = await supabase
       .from('tank_calibration')
-      .select('tank_id, dip_cm, volume_liters')
+      .select('tank_id, dip_mm, volume_liters')
       .eq('tank_id', tid)
-      .order('dip_cm', { ascending: true });
+      .order('dip_mm', { ascending: true });
     if (existingErr) throw existingErr;
 
     const { error: delErr } = await supabase.from('tank_calibration').delete().eq('tank_id', tid);
     if (delErr) throw delErr;
 
-    const rows = points.map((p) => ({ tank_id: tid, dip_cm: Number(p.dip_cm), volume_liters: Number(p.volume_liters) }));
+    const rows = points.map((p) => ({ tank_id: tid, dip_mm: Number(p.dip_mm), volume_liters: Number(p.volume_liters) }));
     const { data, error: insErr } = await supabase.from('tank_calibration').insert(rows).select();
     if (insErr) {
       const restoreRows = (existingRows || []).map((row) => ({
         tank_id: row.tank_id,
-        dip_cm: Number(row.dip_cm),
+        dip_mm: Number(row.dip_mm),
         volume_liters: Number(row.volume_liters),
       }));
       const restoreResult = restoreRows.length
@@ -165,6 +168,15 @@ async function handleSalesCreate(req, res) {
   const { data, error } = await supabase.from('sales').insert(normalizedRows).select();
   if (error) throw error;
   return res.status(201).json(data);
+}
+
+async function handleSalesUpdate(req, res) {
+  const { id, ...rest } = req.body || {};
+  if (!id) return res.status(400).json({ error: 'ID is required' });
+  const [normalized] = await normalizeSalesRows([rest], supabase);
+  const { data, error } = await supabase.from('sales').update(normalized).eq('id', id).select().single();
+  if (error) throw error;
+  return res.status(200).json(data);
 }
 
 async function handleStockMovementCreate(req, res) {

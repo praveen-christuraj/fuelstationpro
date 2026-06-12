@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, Upload, FileDown, Gauge, Database } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import Modal, { ConfirmModal } from '../../components/ui/Modal';
-import { Field, Input } from '../../components/ui/Field';
+import { Field, Input, Select } from '../../components/ui/Field';
 import { Loading, ErrorState, EmptyState } from '../../components/ui/States';
 import { Badge } from '../../components/ui/Badge';
 import { apiGet, apiPost, apiPut, apiDelete, fmtNum } from '../../lib/api';
@@ -10,6 +10,7 @@ import { parseCSV, toCSV, downloadCSV } from '../../lib/csv';
 
 export default function Tanks() {
   const [tanks, setTanks] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [modal, setModal] = useState(false);
@@ -25,8 +26,10 @@ export default function Tanks() {
 
   const load = async () => {
     setLoading(true); setError('');
-    try { setTanks(await apiGet('/api/tanks')); }
-    catch (e: any) { setError(e.message); } finally { setLoading(false); }
+    try {
+      const [t, p] = await Promise.all([apiGet('/api/tanks'), apiGet('/api/products')]);
+      setTanks(t); setProducts(p);
+    } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
 
@@ -54,20 +57,20 @@ export default function Tanks() {
   };
 
   const downloadCalTemplate = () => {
-    const sample = Array.from({ length: 5 }, (_, i) => ({ dip_cm: (i + 1) * 10, volume_liters: (i + 1) * 850 }));
-    downloadCSV(`tank_calibration_template.csv`, toCSV(sample, ['dip_cm', 'volume_liters']));
+    const sample = Array.from({ length: 5 }, (_, i) => ({ dip_mm: (i + 1) * 10, volume_liters: (i + 1) * 850 }));
+    downloadCSV(`tank_calibration_template.csv`, toCSV(sample, ['dip_mm', 'volume_liters']));
   };
 
-  const validateLocal = (points: { dip_cm: number; volume_liters: number }[]) => {
+  const validateLocal = (points: { dip_mm: number; volume_liters: number }[]) => {
     const errs: string[] = [];
     if (points.length < 2) errs.push('Need at least 2 calibration points');
     for (let i = 1; i < points.length; i++) {
-      if (points[i].dip_cm <= points[i - 1].dip_cm) errs.push(`Row ${i + 1}: dip_cm (${points[i].dip_cm}) must be > row ${i} (${points[i - 1].dip_cm})`);
+      if (points[i].dip_mm <= points[i - 1].dip_mm) errs.push(`Row ${i + 1}: dip_mm (${points[i].dip_mm}) must be > row ${i} (${points[i - 1].dip_mm})`);
       if (points[i].volume_liters < points[i - 1].volume_liters) errs.push(`Row ${i + 1}: volume_liters decreased from ${points[i - 1].volume_liters} to ${points[i].volume_liters}`);
     }
-    const dips = points.map((p) => p.dip_cm);
+    const dips = points.map((p) => p.dip_mm);
     const dupes = dips.filter((d, i) => dips.indexOf(d) !== i);
-    if (dupes.length) errs.push(`Duplicate dip_cm values: ${[...new Set(dupes)].join(', ')}`);
+    if (dupes.length) errs.push(`Duplicate dip_mm values: ${[...new Set(dupes)].join(', ')}`);
     return errs;
   };
 
@@ -76,7 +79,20 @@ export default function Tanks() {
     setCalMsg(''); setCalErr('');
     const reader = new FileReader();
     reader.onload = async () => {
-      const raw = parseCSV(String(reader.result || '')).map((r) => ({ dip_cm: Number(r.dip_cm), volume_liters: Number(r.volume_liters) })).filter((r) => !isNaN(r.dip_cm) && !isNaN(r.volume_liters));
+      let raw: { dip_mm: number; volume_liters: number }[] = [];
+      if (file.name.endsWith('.xlsx')) {
+        try {
+          const XLSX = await import('xlsx');
+          const data = new Uint8Array(reader.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json<Record<string, any>>(sheet);
+          raw = json.map((r) => ({ dip_mm: Number(r.dip_mm ?? r.dip_cm), volume_liters: Number(r.volume_liters) })).filter((r) => !isNaN(r.dip_mm) && !isNaN(r.volume_liters));
+        } catch { setCalErr('Failed to parse xlsx file'); return; }
+      } else {
+        const csv = String(reader.result || '');
+        raw = parseCSV(csv).map((r) => ({ dip_mm: Number(r.dip_mm ?? r.dip_cm), volume_liters: Number(r.volume_liters) })).filter((r) => !isNaN(r.dip_mm) && !isNaN(r.volume_liters));
+      }
       const localErrs = validateLocal(raw);
       if (localErrs.length) { setCalErr(localErrs.join('; ')); return; }
       setCalSaving(true);
@@ -84,7 +100,7 @@ export default function Tanks() {
         const resp = await fetch(`/api/tanks/${calTank.id}/calibration`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ points: raw }),
+          body: JSON.stringify({ points: raw.map((p) => ({ dip_mm: p.dip_mm, volume_liters: p.volume_liters })) }),
         });
         if (!resp.ok) { const e = await resp.json(); throw new Error(e.error || 'Upload failed'); }
         const result = await resp.json();
@@ -93,7 +109,8 @@ export default function Tanks() {
       } catch (err: any) { setCalErr(err.message); }
       finally { setCalSaving(false); }
     };
-    reader.readAsText(file);
+    if (file.name.endsWith('.xlsx')) reader.readAsArrayBuffer(file);
+    else reader.readAsText(file);
   };
 
   return (
@@ -128,7 +145,12 @@ export default function Tanks() {
         <div className="grid grid-cols-2 gap-4">
           <Field label="Tank Name" required><Input value={form.name || ''} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
           <Field label="Code"><Input value={form.code || ''} onChange={(e) => setForm({ ...form, code: e.target.value })} /></Field>
-          <Field label="Product" required><Input value={form.product_name || ''} onChange={(e) => setForm({ ...form, product_name: e.target.value })} /></Field>
+          <Field label="Product" required>
+            <Select value={form.product_name || ''} onChange={(e) => setForm({ ...form, product_name: e.target.value })}>
+              <option value="">Select product…</option>
+              {products.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+            </Select>
+          </Field>
           <Field label="Capacity (L)" required><Input type="number" value={form.capacity || ''} onChange={(e) => setForm({ ...form, capacity: e.target.value })} /></Field>
           <Field label="Current Volume (L)"><Input type="number" value={form.current_volume || ''} onChange={(e) => setForm({ ...form, current_volume: e.target.value })} /></Field>
           <Field label="Dead Stock (L)"><Input type="number" value={form.dead_stock || ''} onChange={(e) => setForm({ ...form, dead_stock: e.target.value })} /></Field>
@@ -139,10 +161,10 @@ export default function Tanks() {
       </Modal>
 
       <Modal open={!!calTank} onClose={() => setCalTank(null)} title={`Calibration Chart — ${calTank?.name || ''}`} wide>
-        <p className="text-sm text-slate-500 mb-4">Upload a dip-to-volume calibration chart (CSV). Each row maps a dip reading in cm to the corresponding volume in litres. This powers the Dip-to-Volume calculator.</p>
+        <p className="text-sm text-slate-500 mb-4">Upload a dip-to-volume calibration chart (CSV or xlsx). Each row maps a dip reading in mm to the corresponding volume in litres.</p>
         <div className="flex flex-wrap gap-2 mb-4">
           <button onClick={downloadCalTemplate} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100"><FileDown className="w-4 h-4" /> Download Template</button>
-          <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 cursor-pointer"><Upload className="w-4 h-4" /> Upload Calibration CSV<input type="file" accept=".csv" onChange={onCalFile} className="hidden" /></label>
+          <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 cursor-pointer"><Upload className="w-4 h-4" /> Upload Calibration CSV / xlsx<input type="file" accept=".csv,.xlsx" onChange={onCalFile} className="hidden" /></label>
           {calPoints.length > 0 && <Badge color="green">{calPoints.length} points loaded</Badge>}
         </div>
         {calMsg && <p className="text-sm text-emerald-600 mb-3">{calMsg}</p>}
@@ -150,8 +172,8 @@ export default function Tanks() {
         {calSaving && <p className="text-sm text-blue-600 mb-3">Uploading and replacing calibration chart…</p>}
         <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0"><tr><th className="text-left px-4 py-2">Dip (cm)</th><th className="text-left px-4 py-2">Volume (L)</th></tr></thead>
-            <tbody className="divide-y divide-slate-50">{calPoints.map((c, i) => <tr key={i}><td className="px-4 py-2 text-slate-700">{fmtNum(c.dip_cm, 1)}</td><td className="px-4 py-2 text-slate-700">{fmtNum(c.volume_liters, 0)}</td></tr>)}{calPoints.length === 0 && <tr><td colSpan={2} className="px-4 py-8 text-center text-slate-400 text-sm">No calibration data — upload a chart above</td></tr>}</tbody>
+            <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0"><tr><th className="text-left px-4 py-2">Dip (mm)</th><th className="text-left px-4 py-2">Volume (L)</th></tr></thead>
+            <tbody className="divide-y divide-slate-50">{calPoints.map((c, i) => <tr key={i}><td className="px-4 py-2 text-slate-700">{fmtNum(c.dip_mm ?? c.dip_cm * 10, 1)}</td><td className="px-4 py-2 text-slate-700">{fmtNum(c.volume_liters, 0)}</td></tr>)}{calPoints.length === 0 && <tr><td colSpan={2} className="px-4 py-8 text-center text-slate-400 text-sm">No calibration data — upload a chart above</td></tr>}</tbody>
           </table>
         </div>
       </Modal>

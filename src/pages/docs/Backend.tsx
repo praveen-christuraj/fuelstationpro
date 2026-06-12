@@ -5,7 +5,7 @@ const tables = [
   ['products', 'id, name, code, category, unit, current_price, density, active'],
   ['price_history', 'id, product_name, old_price, new_price, effective_date, changed_by'],
   ['tanks', 'id, name, code, product_name, capacity, current_volume, dead_stock, diameter'],
-  ['tank_calibration', 'id, tank_id, dip_cm, volume_liters'],
+  ['tank_calibration', 'id, tank_id, dip_cm, volume_liters, created_at'],
   ['dispensers', 'id, name, code, make, num_nozzles, status'],
   ['nozzles', 'id, name, dispenser_name, tank_name, product_name, status'],
   ['meters', 'id, nozzle_name, serial_no, opening_reading, current_reading, unit'],

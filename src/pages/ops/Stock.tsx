@@ -23,8 +23,8 @@ export default function Stock() {
         { key: 'id', label: 'ID', hideInForm: true },
         { key: 'movement_date', label: 'Date', type: 'date', required: true, render: (r) => fmtDate(r.movement_date) },
         { key: 'movement_type', label: 'Type', type: 'select', required: true, options: [{ value: 'IN', label: 'Stock In' }, { value: 'OUT', label: 'Stock Out' }], render: (r) => <Badge color={r.movement_type === 'IN' ? 'green' : 'red'}>{r.movement_type}</Badge> },
-        { key: 'tank_name', label: 'Tank', required: true },
-        { key: 'product_name', label: 'Product', required: true },
+        { key: 'tank_name', label: 'Tank', type: 'select', required: true, optionsEndpoint: '/api/tanks' },
+        { key: 'product_name', label: 'Product', type: 'select', required: true, optionsEndpoint: '/api/products' },
         { key: 'volume', label: 'Volume (L)', type: 'number', required: true, render: (r) => fmtNum(r.volume, 0) },
         { key: 'reason', label: 'Reason / Ref', type: 'select', options: [{ value: 'Tanker Receipt', label: 'Tanker Receipt' }, { value: 'Sales Dispense', label: 'Sales Dispense' }, { value: 'Testing', label: 'Testing' }, { value: 'Transfer', label: 'Transfer' }, { value: 'Adjustment', label: 'Adjustment' }] },
       ]} />

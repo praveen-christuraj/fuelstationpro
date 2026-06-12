@@ -7,7 +7,7 @@ export default function CreditSales() {
     { key: 'id', label: 'ID', hideInForm: true },
     { key: 'sale_date', label: 'Date', type: 'date', required: true, render: (r) => fmtDate(r.sale_date) },
     { key: 'customer_name', label: 'Customer', required: true },
-    { key: 'product_name', label: 'Product', required: true },
+    { key: 'product_name', label: 'Product', type: 'select', required: true, optionsEndpoint: '/api/products' },
     { key: 'volume', label: 'Volume (L)', type: 'number', required: true },
     { key: 'amount', label: 'Amount', type: 'number', required: true, render: (r) => fmtMoney(r.amount) },
     { key: 'vehicle_no', label: 'Vehicle No.' },
