@@ -143,7 +143,6 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
     setForm({ ...form, ...updates });
   };
 
-  const visibleCols = columns.filter((c) => !c.hideInForm || c.key === 'id');
   const tableCols = columns.filter((c) => !c.hideInTable);
   const filtered = rows.filter((r) =>
     !search || JSON.stringify(r).toLowerCase().includes(search.toLowerCase())

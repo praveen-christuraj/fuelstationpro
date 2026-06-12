@@ -26,14 +26,12 @@ export function validateChart(points, tankCapacity) {
   }
   if (errors.length > 0) return { valid: false, errors };
 
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    const dipMM = dipLabel === 'dip_mm'
-      ? Number(p.dip_mm)
-      : Number(p.dip_cm) * 10;
-    p.dip_mm = dipMM;
-    p.volume_liters = Number(p.volume_liters);
-  }
+  const normalized = points.map((p) => ({
+    dip_mm: dipLabel === 'dip_mm' ? Number(p.dip_mm) : Number(p.dip_cm) * 10,
+    volume_liters: Number(p.volume_liters),
+  }));
+  points.length = 0;
+  points.push(...normalized);
 
   for (let i = 1; i < points.length; i++) {
     if (points[i].dip_mm <= points[i - 1].dip_mm) {

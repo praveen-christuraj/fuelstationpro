@@ -8,9 +8,8 @@ import { Badge } from '../../components/ui/Badge';
 
 export default function Stock() {
   const [moves, setMoves] = useState<any[]>([]);
-  const [stockLoading, setStockLoading] = useState(true);
   const [stockError, setStockError] = useState('');
-  useEffect(() => { apiGet('/api/stock-movements').then(setMoves).catch((e) => setStockError(e.message)).finally(() => setStockLoading(false)); }, []);
+  useEffect(() => { apiGet('/api/stock-movements').then(setMoves).catch((e) => setStockError(e.message)); }, []);
   const inTotal = moves.filter((m) => m.movement_type === 'IN').reduce((s, m) => s + Number(m.volume || 0), 0);
   const outTotal = moves.filter((m) => m.movement_type === 'OUT').reduce((s, m) => s + Number(m.volume || 0), 0);
 
