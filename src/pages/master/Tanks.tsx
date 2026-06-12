@@ -46,7 +46,7 @@ export default function Tanks() {
     } catch (e: any) { setFormErr(e.message); }
   };
 
-  const remove = async (t: any) => { await apiDelete('/api/tanks', { id: t.id }); await load(); };
+  const remove = async (t: any) => { try { await apiDelete('/api/tanks', { id: t.id }); await load(); } catch (e: any) { setError(e.message); } };
 
   const openCal = async (t: any) => {
     setCalTank(t); setCalMsg(''); setCalErr('');
@@ -97,13 +97,7 @@ export default function Tanks() {
       if (localErrs.length) { setCalErr(localErrs.join('; ')); return; }
       setCalSaving(true);
       try {
-        const resp = await fetch(`/api/tanks/${calTank.id}/calibration`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ points: raw.map((p) => ({ dip_mm: p.dip_mm, volume_liters: p.volume_liters })) }),
-        });
-        if (!resp.ok) { const e = await resp.json(); throw new Error(e.error || 'Upload failed'); }
-        const result = await resp.json();
+        const result = await apiPut(`/api/tanks/${calTank.id}/calibration`, { points: raw.map((p) => ({ dip_mm: p.dip_mm, volume_liters: p.volume_liters })) });
         setCalPoints(result.points || []);
         setCalMsg(`Imported ${result.count} calibration points.`);
       } catch (err: any) { setCalErr(err.message); }

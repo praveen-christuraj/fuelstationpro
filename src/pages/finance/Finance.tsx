@@ -15,6 +15,7 @@ export default function Finance() {
   const [bufferTanks, setBufferTanks] = useState<any[]>([]);
   const [tanks, setTanks] = useState<any[]>([]);
 
+  const [loadError, setLoadError] = useState('');
   const [showDeposit, setShowDeposit] = useState(false);
   const [depositErr, setDepositErr] = useState('');
   const [depositSaving, setDepositSaving] = useState(false);
@@ -41,8 +42,8 @@ export default function Finance() {
       setBankAccounts(b || []);
       setBufferTanks(buf || []);
       setTanks(tankRows || []);
-    } catch {
-      // ignore
+    } catch (e: any) {
+      setLoadError(e.message || 'Failed to load data');
     }
   };
 
@@ -87,7 +88,7 @@ export default function Finance() {
         txn_date: depositForm.deposit_date,
         txn_type: 'Deposit',
         category: 'Cash Deposit',
-        bank_account: bank ? bank.name : null,
+        bank_account: bank ? (bank.bank_name ?? bank.name ?? null) : null,
         amount: Number(depositForm.amount || 0),
         reference: depositForm.reference || null,
       });
@@ -130,6 +131,7 @@ export default function Finance() {
 
   return (
     <div className="space-y-4">
+      {loadError && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 text-sm">{loadError} <button onClick={() => { setLoadError(''); load(); }} className="underline ml-2">Retry</button></div>}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card className="p-5 flex items-center gap-3"><div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center"><ArrowUpRight className="w-5 h-5 text-emerald-600" /></div><div><div className="text-xs text-slate-400">Total Income</div><div className="text-xl font-bold text-slate-800">{fmtMoney(income)}</div></div></Card>
         <Card className="p-5 flex items-center gap-3"><div className="w-10 h-10 rounded-lg bg-rose-50 flex items-center justify-center"><ArrowDownRight className="w-5 h-5 text-rose-600" /></div><div><div className="text-xs text-slate-400">Total Expense</div><div className="text-xl font-bold text-slate-800">{fmtMoney(expense)}</div></div></Card>
@@ -211,7 +213,7 @@ export default function Finance() {
             <Field label="Bank Account">
               <Select value={depositForm.bank_account_id} onChange={(e) => setDepositForm({ ...depositForm, bank_account_id: e.target.value })}>
                 <option value="">Select…</option>
-                {bankAccounts.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                {bankAccounts.map((b) => <option key={b.id} value={b.id}>{b.bank_name ?? b.name}</option>)}
               </Select>
             </Field>
             <Field label="Amount" required>

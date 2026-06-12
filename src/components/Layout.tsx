@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { Fuel, LayoutDashboard, Database, Truck, Gauge, ClipboardList, Wallet, BarChart3, Upload, BookOpen, LogOut, Menu, X, ChevronDown, Boxes, Settings2, FileText } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { ConfirmModal } from './ui/Modal';
 
 interface NavItem { to?: string; label: string; icon: any; }
 interface NavGroup { label: string; icon: any; items: NavItem[]; }
@@ -55,6 +56,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const nav = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [open, setOpen] = useState<Record<string, boolean>>({ Overview: true, 'Master Setup': true, Operations: true, Finance: false, Reports: false, 'Bulk Upload': false, Documentation: false });
+  const [confirmLogout, setConfirmLogout] = useState(false);
 
   const handleLogout = async () => { await signOut(); nav('/login'); };
 
@@ -93,11 +95,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <div className="text-xs font-medium text-white truncate">{user?.email}</div>
             <div className="text-[10px] text-slate-400">Administrator</div>
           </div>
-          <button onClick={handleLogout} className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-rose-400" title="Sign out"><LogOut className="w-4 h-4" /></button>
+          <button onClick={() => setConfirmLogout(true)} className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-rose-400" title="Sign out"><LogOut className="w-4 h-4" /></button>
         </div>
+        <ConfirmModal open={confirmLogout} onClose={() => setConfirmLogout(false)} onConfirm={handleLogout} title="Sign Out" message="Are you sure you want to sign out?" danger={false} />
       </div>
     </div>
   );
+
 
   return (
     <div className="min-h-screen bg-slate-50">

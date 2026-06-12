@@ -124,7 +124,13 @@ export default function MasterTable({ endpoint, title, subtitle, columns, entity
     const option = opts.find((o) => o.value === value);
     const updates = { [c.key]: value };
     if (c.onFieldChange) {
-      Object.assign(updates, c.onFieldChange(form, c.key, value, option));
+      let rawOption: any = option;
+      if (c.optionsEndpoint) {
+        const rawData = optionsCache[c.optionsEndpoint] || [];
+        const valueKey = c.optionsValueKey || 'name';
+        rawOption = rawData.find((item: any) => String(item[valueKey]) === String(value));
+      }
+      Object.assign(updates, c.onFieldChange(form, c.key, value, rawOption));
     }
     setForm({ ...form, ...updates });
   };

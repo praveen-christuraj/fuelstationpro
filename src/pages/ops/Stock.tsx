@@ -8,12 +8,15 @@ import { Badge } from '../../components/ui/Badge';
 
 export default function Stock() {
   const [moves, setMoves] = useState<any[]>([]);
-  useEffect(() => { apiGet('/api/stock-movements').then(setMoves).catch(() => {}); }, []);
+  const [stockLoading, setStockLoading] = useState(true);
+  const [stockError, setStockError] = useState('');
+  useEffect(() => { apiGet('/api/stock-movements').then(setMoves).catch((e) => setStockError(e.message)).finally(() => setStockLoading(false)); }, []);
   const inTotal = moves.filter((m) => m.movement_type === 'IN').reduce((s, m) => s + Number(m.volume || 0), 0);
   const outTotal = moves.filter((m) => m.movement_type === 'OUT').reduce((s, m) => s + Number(m.volume || 0), 0);
 
   return (
     <div className="space-y-4">
+      {stockError && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 text-sm">{stockError}</div>}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card className="p-5 flex items-center gap-3"><div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center"><ArrowDownToLine className="w-5 h-5 text-emerald-600" /></div><div><div className="text-xs text-slate-400">Total Stock In</div><div className="text-xl font-bold text-slate-800">{fmtNum(inTotal, 0)} L</div></div></Card>
         <Card className="p-5 flex items-center gap-3"><div className="w-10 h-10 rounded-lg bg-rose-50 flex items-center justify-center"><ArrowUpFromLine className="w-5 h-5 text-rose-600" /></div><div><div className="text-xs text-slate-400">Total Stock Out</div><div className="text-xl font-bold text-slate-800">{fmtNum(outTotal, 0)} L</div></div></Card>

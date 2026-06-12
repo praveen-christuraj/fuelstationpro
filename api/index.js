@@ -1,7 +1,7 @@
 import supabase from './db-client.js';
 import { validateChart } from './calibration-validate.js';
 import { normalizeSalesRows } from './sales-validate.js';
-import { normalizeStockMovementRows, normalizeTankerUnloadingRows } from './stock-validate.js';
+import { normalizeStockMovementRows } from './stock-validate.js';
 import { resolveTable } from './table-resolve.js';
 import { applyCorsHeaders, isAllowedResource, isOriginAllowed } from './runtime-config.js';
 import { authenticateRequest } from './auth.js';
@@ -13,6 +13,86 @@ const TXN_TABLES = [
   'stock_movements', 'sales', 'credit_sales', 'finance_transactions',
   'price_history',
 ];
+
+const REFERENCE_MAP = {
+  products: [
+    { table: 'tanks', column: 'product_name', label: 'tanks' },
+    { table: 'nozzles', column: 'product_name', label: 'nozzles' },
+    { table: 'price_history', column: 'product_name', label: 'price history records' },
+    { table: 'tanker_unloading', column: 'product_name', label: 'tanker unloading records' },
+    { table: 'stock_movements', column: 'product_name', label: 'stock movements' },
+    { table: 'sales', column: 'product_name', label: 'sales records' },
+    { table: 'credit_sales', column: 'product_name', label: 'credit sales' },
+    { table: 'buffer_tanks', column: 'product_name', label: 'buffer tank records' },
+    { table: 'tanker_unloading_lines', column: 'product_name', label: 'tanker unloading lines' },
+    { table: 'daily_sales_nozzle_readings', column: 'product_name', label: 'daily sales nozzle readings' },
+    { table: 'daily_sales_testing', column: 'product_name', label: 'daily sales testing records' },
+  ],
+  tanks: [
+    { table: 'nozzles', column: 'tank_name', label: 'nozzles' },
+    { table: 'tank_calibration', column: 'tank_id', isId: true, label: 'calibration charts' },
+    { table: 'tanker_unloading', column: 'tank_name', label: 'tanker unloading records' },
+    { table: 'tanker_unloading_lines', column: 'tank_name', label: 'tanker unloading lines' },
+    { table: 'stock_movements', column: 'tank_name', label: 'stock movements' },
+    { table: 'daily_sales_nozzle_readings', column: 'tank_name', label: 'daily sales nozzle readings' },
+    { table: 'dip_readings', column: 'tank_name', label: 'dip readings' },
+    { table: 'daily_sales_testing', column: 'tank_name', label: 'daily sales testing records' },
+  ],
+  dispensers: [
+    { table: 'nozzles', column: 'dispenser_name', label: 'nozzles' },
+    { table: 'daily_sales_nozzle_readings', column: 'dispenser_name', label: 'daily sales nozzle readings' },
+  ],
+  nozzles: [
+    { table: 'meters', column: 'nozzle_name', label: 'meters' },
+    { table: 'sales', column: 'nozzle_name', label: 'sales records' },
+    { table: 'daily_sales_nozzle_readings', column: 'nozzle_name', label: 'daily sales nozzle readings' },
+    { table: 'daily_sales_testing', column: 'nozzle_name', label: 'daily sales testing records' },
+  ],
+  operators: [
+    { table: 'sales', column: 'operator_name', label: 'sales records' },
+    { table: 'daily_sales_entries', column: 'operator_name', label: 'daily sales entries' },
+  ],
+  shifts: [
+    { table: 'sales', column: 'shift_name', label: 'sales records' },
+    { table: 'daily_sales_entries', column: 'shift_name', label: 'daily sales entries' },
+  ],
+  suppliers: [
+    { table: 'tanker_unloading', column: 'supplier_name', label: 'tanker unloading records' },
+    { table: 'tanker_unloading_headers', column: 'supplier_name', label: 'tanker unloading headers' },
+  ],
+  bank_accounts: [
+    { table: 'finance_transactions', column: 'bank_account', label: 'finance transactions' },
+  ],
+};
+
+async function beforeDeleteCheck(dbTable, id, supabase) {
+  const { data: record, error: fetchErr } = await supabase.from(dbTable).select('*').eq('id', id).single();
+  if (fetchErr) throw fetchErr;
+  if (!record) throw new Error('Record not found');
+
+  if (record.active === true || record.active === 1) {
+    throw new Error('Cannot delete an active record. Set it to inactive first.');
+  }
+  if (record.status && ['Active', 'Operational'].includes(record.status)) {
+    throw new Error(`Cannot delete a record with status "${record.status}". Change status first.`);
+  }
+
+  const refs = REFERENCE_MAP[dbTable];
+  if (refs) {
+    for (const ref of refs) {
+      const refValue = ref.isId ? id : record[ref.column];
+      if (refValue == null || refValue === '') continue;
+      const { count, error: countErr } = await supabase
+        .from(ref.table)
+        .select('*', { count: 'exact', head: true })
+        .eq(ref.column, refValue);
+      if (countErr) throw countErr;
+      if (count > 0) {
+        throw new Error(`Cannot delete this ${dbTable.slice(0, -1)} because it is referenced by ${count} ${ref.label}. Remove those references first.`);
+      }
+    }
+  }
+}
 
 function parsePath(url) {
   const parts = new URL(url, 'http://localhost').pathname.replace('/api/', '').split('/').filter(Boolean);
@@ -82,9 +162,6 @@ export default async function handler(req, res) {
     if (parts[0] === 'tanker-unloading' && req.method === 'POST') {
       return await handleTankerUnloadingCreateV2(req, res);
     }
-    if (parts[0] === 'tanker-unloading' && req.method === 'PUT') {
-      return await handleTankerUnloadingUpdate(req, res);
-    }
     if (parts[0] === 'tanker-unloading' && req.method === 'GET') {
       return await handleTankerUnloadingListV2(req, res);
     }
@@ -111,13 +188,17 @@ export default async function handler(req, res) {
       return res.status(201).json(data);
     }
     if (req.method === 'PUT') {
-      const { id, ...rest } = req.body;
+      const { id } = req.body || {};
+      if (!id) return res.status(400).json({ error: 'ID is required' });
+      const { id: _id, ...rest } = req.body;
       const { data, error } = await supabase.from(dbTable).update(rest).eq('id', id).select().single();
       if (error) throw error;
       return res.status(200).json(data);
     }
     if (req.method === 'DELETE') {
-      const { id } = req.body;
+      const { id } = req.body || {};
+      if (!id) return res.status(400).json({ error: 'ID is required' });
+      await beforeDeleteCheck(dbTable, id, supabase);
       const { error } = await supabase.from(dbTable).delete().eq('id', id);
       if (error) throw error;
       return res.status(200).json({ ok: true });
@@ -219,23 +300,6 @@ async function handleStockMovementUpdate(req, res) {
   if (!id) return res.status(400).json({ error: 'ID is required' });
   const [normalized] = await normalizeStockMovementRows([rest], supabase);
   const { data, error } = await supabase.from('stock_movements').update(normalized).eq('id', id).select().single();
-  if (error) throw error;
-  return res.status(200).json(data);
-}
-
-async function handleTankerUnloadingCreate(req, res) {
-  const rows = Array.isArray(req.body) ? req.body : [req.body];
-  const normalizedRows = await normalizeTankerUnloadingRows(rows, supabase);
-  const { data, error } = await supabase.from('tanker_unloading').insert(normalizedRows).select();
-  if (error) throw error;
-  return res.status(201).json(data);
-}
-
-async function handleTankerUnloadingUpdate(req, res) {
-  const { id, ...rest } = req.body || {};
-  if (!id) return res.status(400).json({ error: 'ID is required' });
-  const [normalized] = await normalizeTankerUnloadingRows([rest], supabase);
-  const { data, error } = await supabase.from('tanker_unloading').update(normalized).eq('id', id).select().single();
   if (error) throw error;
   return res.status(200).json(data);
 }
@@ -404,12 +468,18 @@ async function handleTankerUnloadingCreateV2(req, res) {
     throw linesErr;
   }
 
-  for (const line of normalizedLines) {
-    const { data: tankRow, error: tErr } = await supabase.from('tanks').select('id, current_volume').eq('name', line.tank_name).single();
-    if (tErr) throw tErr;
-    const nextVol = Number(tankRow.current_volume || 0) + Number(line.received_volume || 0);
-    const { error: updErr } = await supabase.from('tanks').update({ current_volume: nextVol }).eq('id', tankRow.id);
-    if (updErr) throw updErr;
+  try {
+    for (const line of normalizedLines) {
+      const { data: tankRow, error: tErr } = await supabase.from('tanks').select('id, current_volume').eq('name', line.tank_name).single();
+      if (tErr) throw tErr;
+      const nextVol = Number(tankRow.current_volume || 0) + Number(line.received_volume || 0);
+      const { error: updErr } = await supabase.from('tanks').update({ current_volume: nextVol }).eq('id', tankRow.id);
+      if (updErr) throw updErr;
+    }
+  } catch (volErr) {
+    await supabase.from('tanker_unloading_lines').delete().eq('header_id', header.id);
+    await supabase.from('tanker_unloading_headers').delete().eq('id', header.id);
+    throw new Error(`Tank volume update failed, unloading entry rolled back: ${volErr.message}`);
   }
 
   return res.status(201).json({ header, lines: insertedLines || [] });
@@ -566,30 +636,37 @@ async function createDailySalesEntry(payload) {
     }
   }
 
-  for (const r of normalizedReadings) {
-    const meter = meterMap.get(r.nozzle_name);
-    const { error: updMeterErr } = await supabase.from('meters').update({ current_reading: r.closing_reading }).eq('id', meter.id);
-    if (updMeterErr) throw updMeterErr;
-    if (r.tank_name) {
-      const { data: tankRow, error: tErr } = await supabase.from('tanks').select('id, current_volume').eq('name', r.tank_name).single();
-      if (tErr) throw tErr;
-      const nextVol = Math.max(0, Number(tankRow.current_volume || 0) - Number(r.volume || 0));
-      const { error: updTankErr } = await supabase.from('tanks').update({ current_volume: nextVol }).eq('id', tankRow.id);
-      if (updTankErr) throw updTankErr;
+  try {
+    for (const r of normalizedReadings) {
+      const meter = meterMap.get(r.nozzle_name);
+      const { error: updMeterErr } = await supabase.from('meters').update({ current_reading: r.closing_reading }).eq('id', meter.id);
+      if (updMeterErr) throw updMeterErr;
+      if (r.tank_name) {
+        const { data: tankRow, error: tErr } = await supabase.from('tanks').select('id, current_volume').eq('name', r.tank_name).single();
+        if (tErr) throw tErr;
+        const nextVol = Math.max(0, Number(tankRow.current_volume || 0) - Number(r.volume || 0));
+        const { error: updTankErr } = await supabase.from('tanks').update({ current_volume: nextVol }).eq('id', tankRow.id);
+        if (updTankErr) throw updTankErr;
+      }
     }
-  }
 
-  for (const t of normalizedTesting) {
-    const { data: existing, error: bErr } = await supabase.from('buffer_tanks').select('id, volume').eq('product_name', t.product_name).maybeSingle();
-    if (bErr) throw bErr;
-    if (!existing) {
-      const { error: insErr } = await supabase.from('buffer_tanks').insert([{ product_name: t.product_name, volume: Number(t.volume || 0) }]);
-      if (insErr) throw insErr;
-    } else {
-      const next = Number(existing.volume || 0) + Number(t.volume || 0);
-      const { error: updErr } = await supabase.from('buffer_tanks').update({ volume: next, updated_at: new Date().toISOString() }).eq('id', existing.id);
-      if (updErr) throw updErr;
+    for (const t of normalizedTesting) {
+      const { data: existing, error: bErr } = await supabase.from('buffer_tanks').select('id, volume').eq('product_name', t.product_name).maybeSingle();
+      if (bErr) throw bErr;
+      if (!existing) {
+        const { error: insErr } = await supabase.from('buffer_tanks').insert([{ product_name: t.product_name, volume: Number(t.volume || 0) }]);
+        if (insErr) throw insErr;
+      } else {
+        const next = Number(existing.volume || 0) + Number(t.volume || 0);
+        const { error: updErr } = await supabase.from('buffer_tanks').update({ volume: next, updated_at: new Date().toISOString() }).eq('id', existing.id);
+        if (updErr) throw updErr;
+      }
     }
+  } catch (updateErr) {
+    await supabase.from('daily_sales_testing').delete().eq('sales_entry_id', entry.id);
+    await supabase.from('daily_sales_nozzle_readings').delete().eq('sales_entry_id', entry.id);
+    await supabase.from('daily_sales_entries').delete().eq('id', entry.id);
+    throw new Error(`Meter/tank/buffer update failed, sales entry rolled back: ${updateErr.message}`);
   }
 
   return entry.id;

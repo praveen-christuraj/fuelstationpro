@@ -34,9 +34,13 @@ export default function Login() {
         if (error) throw error;
         nav('/');
       }
-    } catch (e: any) { setErr(e.message || 'Authentication failed'); }
+    } catch (e: any) {
+      setErr(e.message || 'Authentication failed');
+    }
     finally { setLoading(false); }
   };
+
+
 
 
   return (

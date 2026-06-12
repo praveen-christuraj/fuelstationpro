@@ -13,7 +13,7 @@ export default function DipVolume() {
   const [dip, setDip] = useState('');
   const [result, setResult] = useState<number | null>(null);
 
-  useEffect(() => { apiGet('/api/tanks').then((t) => { setTanks(t); setLoading(false); }); }, []);
+  useEffect(() => { apiGet('/api/tanks').then((t) => { setTanks(t); }).catch(() => {}).finally(() => setLoading(false)); }, []);
   useEffect(() => {
     if (tankId) {
       apiGet(`/api/tanks/${tankId}/calibration`).then((resp) => setPoints(resp.points || [])).catch(() => setPoints([]));

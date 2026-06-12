@@ -75,7 +75,7 @@ export default function LossGain() {
       const receipts = receiptsByTank.get(tank.name) || 0;
       const salesOut = salesByTank.get(tank.name) || 0;
       const testing = testingByTank.get(tank.name) || 0;
-      const expectedClosing = opening + receipts - salesOut + testing;
+      const expectedClosing = opening + receipts - salesOut - testing;
       const variance = actualClosing - expectedClosing;
       return {
         tank: tank.name,
