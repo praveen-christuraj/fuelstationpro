@@ -356,6 +356,7 @@ CREATE TABLE IF NOT EXISTS dip_readings (
 );
 create index if not exists idx_dip_readings_date on dip_readings (reading_date desc);
 create index if not exists idx_dip_readings_tank on dip_readings (tank_name);
+create unique index if not exists uq_dip_readings_day_tank_type on dip_readings (reading_date, tank_name, reading_type);
 
 -- 24. cash_deposits
 CREATE TABLE IF NOT EXISTS cash_deposits (

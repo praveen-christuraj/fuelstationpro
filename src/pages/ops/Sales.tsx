@@ -413,56 +413,91 @@ export default function Sales() {
               Select a dispenser to load only its active nozzles for sales entry.
             </Card>
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-slate-200">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-slate-500 text-xs">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Nozzle</th>
-                    <th className="px-3 py-2 text-left">Product</th>
-                    <th className="px-3 py-2 text-right">Opening</th>
-                    <th className="px-3 py-2 text-right">Closing</th>
-                    <th className="px-3 py-2 text-right">Dispensed</th>
-                    <th className="px-3 py-2 text-right">Testing</th>
-                    <th className="px-3 py-2 text-right">Net Sale</th>
-                    <th className="px-3 py-2 text-right">Rate</th>
-                    <th className="px-3 py-2 text-right">Net Amount</th>
-                    <th className="px-3 py-2 text-left">Remarks</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {entryRows.map((row, idx) => {
-                    const nozzle = nozzleMap.get(row.nozzle_name);
-                    const meter = meterMap.get(row.nozzle_name);
-                    const opening = Number(meter?.current_reading || 0);
-                    const closing = row.closing_reading === '' ? opening : Number(row.closing_reading);
-                    const dispensed = Math.max(0, closing - opening);
-                    const testing = Number(row.testing_volume || 0);
-                    const netVolume = Math.max(0, dispensed - testing);
-                    const price = Number(priceMap.get(nozzle?.product_name || '') ?? 0);
-                    const amount = netVolume * price;
-                    return (
-                      <tr key={row.nozzle_name}>
-                        <td className="px-3 py-2 text-slate-700">{row.nozzle_name}</td>
-                        <td className="px-3 py-2"><Badge color="blue">{nozzle?.product_name || '—'}</Badge></td>
-                        <td className="px-3 py-2 text-right text-slate-600">{fmtNum(opening, 2)}</td>
-                        <td className="px-3 py-2 text-right">
-                          <Input type="number" step="0.01" value={row.closing_reading} onChange={(e) => updateEntryRow(idx, 'closing_reading', e.target.value)} />
-                        </td>
-                        <td className="px-3 py-2 text-right font-semibold text-slate-700">{fmtNum(dispensed, 2)} L</td>
-                        <td className="px-3 py-2 text-right">
-                          <Input type="number" step="0.01" min="0" value={row.testing_volume} onChange={(e) => updateEntryRow(idx, 'testing_volume', e.target.value)} />
-                        </td>
-                        <td className="px-3 py-2 text-right font-semibold text-slate-700">{fmtNum(netVolume, 2)} L</td>
-                        <td className="px-3 py-2 text-right text-slate-600">{fmtMoney(price)}</td>
-                        <td className="px-3 py-2 text-right font-semibold text-emerald-700">{fmtMoney(amount)}</td>
-                        <td className="px-3 py-2">
-                          <Input value={row.remarks} onChange={(e) => updateEntryRow(idx, 'remarks', e.target.value)} placeholder="Optional" />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div className="space-y-3">
+              <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                Enter each nozzle as a separate card. Opening, closing, testing, net sale and amount stay visible while typing.
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {entryRows.map((row, idx) => {
+                  const nozzle = nozzleMap.get(row.nozzle_name);
+                  const meter = meterMap.get(row.nozzle_name);
+                  const opening = Number(meter?.current_reading || 0);
+                  const closing = row.closing_reading === '' ? opening : Number(row.closing_reading);
+                  const dispensed = Math.max(0, closing - opening);
+                  const testing = Number(row.testing_volume || 0);
+                  const netVolume = Math.max(0, dispensed - testing);
+                  const price = Number(priceMap.get(nozzle?.product_name || '') ?? 0);
+                  const amount = netVolume * price;
+                  return (
+                    <Card key={row.nozzle_name} className="p-4 border-slate-200">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-base font-semibold text-slate-800">{row.nozzle_name}</div>
+                          <div className="text-xs text-slate-500 mt-1">{nozzle?.dispenser_name || form.dispenser_name}</div>
+                        </div>
+                        <Badge color="blue">{nozzle?.product_name || '—'}</Badge>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 mt-4">
+                        <div className="rounded-lg bg-slate-50 p-3">
+                          <div className="text-xs text-slate-400">Opening Reading</div>
+                          <div className="text-lg font-bold text-slate-800 mt-1">{fmtNum(opening, 2)}</div>
+                        </div>
+                        <div className="rounded-lg bg-slate-50 p-3">
+                          <div className="text-xs text-slate-400">Rate</div>
+                          <div className="text-lg font-bold text-slate-800 mt-1">{fmtMoney(price)}</div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                        <Field label="Closing Reading" required>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={row.closing_reading}
+                            onChange={(e) => updateEntryRow(idx, 'closing_reading', e.target.value)}
+                          />
+                        </Field>
+                        <Field label="Testing Quantity (L)">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={row.testing_volume}
+                            onChange={(e) => updateEntryRow(idx, 'testing_volume', e.target.value)}
+                          />
+                        </Field>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3 mt-4">
+                        <div className="rounded-lg bg-slate-50 p-3 text-center">
+                          <div className="text-xs text-slate-400">Dispensed</div>
+                          <div className="text-lg font-bold text-slate-800 mt-1">{fmtNum(dispensed, 2)} L</div>
+                        </div>
+                        <div className="rounded-lg bg-amber-50 p-3 text-center">
+                          <div className="text-xs text-amber-700">Testing</div>
+                          <div className="text-lg font-bold text-amber-700 mt-1">{fmtNum(testing, 2)} L</div>
+                        </div>
+                        <div className="rounded-lg bg-emerald-50 p-3 text-center">
+                          <div className="text-xs text-emerald-700">Net Sale</div>
+                          <div className="text-lg font-bold text-emerald-700 mt-1">{fmtNum(netVolume, 2)} L</div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg bg-emerald-50 p-3 mt-4">
+                        <div className="text-xs text-emerald-700">Net Amount</div>
+                        <div className="text-2xl font-bold text-emerald-700 mt-1">{fmtMoney(amount)}</div>
+                      </div>
+
+                      <div className="mt-4">
+                        <Field label="Remarks">
+                          <Input value={row.remarks} onChange={(e) => updateEntryRow(idx, 'remarks', e.target.value)} placeholder="Optional remarks for testing or special case" />
+                        </Field>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
             </div>
           )}
 

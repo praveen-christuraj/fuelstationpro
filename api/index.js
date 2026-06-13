@@ -910,15 +910,40 @@ async function createDipReading(payload) {
   const vol = interpolateVolume(points, dipMM);
   if (vol == null) throw new Error('No calibration data available for this tank');
 
-  const { data, error } = await supabase
+  const { data: existing, error: existingErr } = await supabase
     .from('dip_readings')
-    .insert([{ reading_date: readingDate, tank_name: tank.name, dip_mm: dipMM, volume_liters: vol, reading_type: readingType }])
-    .select()
-    .single();
-  if (error) throw error;
+    .select('id')
+    .eq('reading_date', readingDate)
+    .eq('tank_name', tank.name)
+    .eq('reading_type', readingType)
+    .maybeSingle();
+  if (existingErr) throw existingErr;
 
-  const { error: updErr } = await supabase.from('tanks').update({ current_volume: vol }).eq('id', tank.id);
-  if (updErr) throw updErr;
+  let data;
+  if (existing?.id) {
+    const result = await supabase
+      .from('dip_readings')
+      .update({ dip_mm: dipMM, volume_liters: vol })
+      .eq('id', existing.id)
+      .select()
+      .single();
+    if (result.error) throw result.error;
+    data = result.data;
+  } else {
+    const result = await supabase
+      .from('dip_readings')
+      .insert([{ reading_date: readingDate, tank_name: tank.name, dip_mm: dipMM, volume_liters: vol, reading_type: readingType }])
+      .select()
+      .single();
+    if (result.error) throw result.error;
+    data = result.data;
+  }
+
+  // Physical stock is finalized only from day closing dip.
+  if (readingType === 'closing') {
+    const { error: updErr } = await supabase.from('tanks').update({ current_volume: vol }).eq('id', tank.id);
+    if (updErr) throw updErr;
+  }
 
   return data;
 }

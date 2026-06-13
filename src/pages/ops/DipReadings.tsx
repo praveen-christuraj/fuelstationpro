@@ -15,6 +15,7 @@ export default function DipReadings() {
   const [tanks, setTanks] = useState<any[]>([]);
   const [pointsCache, setPointsCache] = useState<Record<string, any[]>>({});
   const [readings, setReadings] = useState<any[]>([]);
+  const [businessDate, setBusinessDate] = useState(new Date().toISOString().slice(0, 10));
 
   const [open, setOpen] = useState(false);
   const [formErr, setFormErr] = useState('');
@@ -63,8 +64,20 @@ export default function DipReadings() {
     return interpolateVolume(points, dip);
   }, [form.dip_mm, form.tank_name, tanks, pointsCache]);
 
+  const readingsForDate = useMemo(
+    () => readings.filter((r) => r.reading_date === businessDate),
+    [readings, businessDate],
+  );
+  const closingByTank = useMemo(() => {
+    const map = new Map<string, any>();
+    readingsForDate.forEach((r) => {
+      if (r.reading_type === 'closing') map.set(r.tank_name, r);
+    });
+    return map;
+  }, [readingsForDate]);
+
   const openCreate = () => {
-    setForm({ reading_date: new Date().toISOString().slice(0, 10), tank_name: '', dip_mm: '', reading_type: 'closing' });
+    setForm({ reading_date: businessDate, tank_name: '', dip_mm: '', reading_type: 'closing' });
     setFormErr('');
     setOpen(true);
   };
@@ -83,6 +96,7 @@ export default function DipReadings() {
         dip_mm: Number(form.dip_mm),
         reading_type: form.reading_type,
       });
+      setBusinessDate(form.reading_date);
       setOpen(false);
       await load();
     } catch (e: any) {
@@ -99,12 +113,34 @@ export default function DipReadings() {
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">Dip Readings</h1>
-          <p className="text-sm text-slate-400 mt-0.5">Record dip measurements and compute litres from calibration</p>
+          <h1 className="text-xl font-bold text-slate-800">Daily Stock Closing</h1>
+          <p className="text-sm text-slate-400 mt-0.5">Record tank dip readings, compute physical closing volume from calibration, and save it for loss/gain analysis</p>
         </div>
-        <button onClick={openCreate} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
-          <Plus className="w-4 h-4" /> New Dip Reading
-        </button>
+        <div className="flex items-end gap-3">
+          <div className="w-44">
+            <Field label="Business Date">
+              <Input type="date" value={businessDate} onChange={(e) => setBusinessDate(e.target.value)} />
+            </Field>
+          </div>
+          <button onClick={openCreate} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
+            <Plus className="w-4 h-4" /> Record Dip
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Card className="p-5">
+          <div className="text-xs text-slate-400">Tanks Closed</div>
+          <div className="text-2xl font-bold text-slate-800 mt-1">{closingByTank.size} / {tanks.length}</div>
+        </Card>
+        <Card className="p-5">
+          <div className="text-xs text-slate-400">Physical Closing Volume</div>
+          <div className="text-2xl font-bold text-slate-800 mt-1">{fmtNum(Array.from(closingByTank.values()).reduce((s, r) => s + Number(r.volume_liters || 0), 0), 1)} L</div>
+        </Card>
+        <Card className="p-5">
+          <div className="text-xs text-slate-400">Mode</div>
+          <div className="text-sm font-medium text-slate-700 mt-2">Only closing dip updates the tank's saved physical stock</div>
+        </Card>
       </div>
 
       <Card className="overflow-hidden">
@@ -120,7 +156,7 @@ export default function DipReadings() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {readings.slice().reverse().map((r) => (
+              {readingsForDate.slice().reverse().map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50/60">
                   <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{fmtDate(r.reading_date)}</td>
                   <td className="px-4 py-3 text-slate-700">{r.tank_name}</td>
@@ -129,7 +165,7 @@ export default function DipReadings() {
                   <td className="px-4 py-3 text-right font-semibold text-emerald-700">{fmtNum(r.volume_liters, 1)} L</td>
                 </tr>
               ))}
-              {readings.length === 0 && (
+              {readingsForDate.length === 0 && (
                 <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-400">No dip readings recorded yet</td></tr>
               )}
             </tbody>
@@ -137,7 +173,7 @@ export default function DipReadings() {
         </div>
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Record Dip Reading">
+      <Modal open={open} onClose={() => setOpen(false)} title="Record Tank Dip / Closing Stock">
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Date" required>
@@ -192,4 +228,3 @@ export default function DipReadings() {
     </div>
   );
 }
-
