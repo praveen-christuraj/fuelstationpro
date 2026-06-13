@@ -17,6 +17,7 @@ type EntryRow = {
 export default function Sales() {
   const [entries, setEntries] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
+  const [priceHistory, setPriceHistory] = useState<any[]>([]);
   const [operators, setOperators] = useState<any[]>([]);
   const [shifts, setShifts] = useState<any[]>([]);
   const [dispensers, setDispensers] = useState<any[]>([]);
@@ -43,9 +44,10 @@ export default function Sales() {
   const load = async () => {
     setLoading(true); setError('');
     try {
-      const [e, p, o, sh, d, n, m] = await Promise.all([
+      const [e, p, ph, o, sh, d, n, m] = await Promise.all([
         apiGet('/api/daily-sales'),
         apiGet('/api/products'),
+        apiGet('/api/price-history'),
         apiGet('/api/operators'),
         apiGet('/api/shifts'),
         apiGet('/api/dispensers'),
@@ -54,6 +56,7 @@ export default function Sales() {
       ]);
       setEntries(e || []);
       setProducts(p || []);
+      setPriceHistory(ph || []);
       setOperators(o || []);
       setShifts(sh || []);
       setDispensers(d || []);
@@ -65,7 +68,22 @@ export default function Sales() {
 
   const meterMap = useMemo(() => new Map(meters.map((m) => [m.nozzle_name, m])), [meters]);
   const nozzleMap = useMemo(() => new Map(nozzles.map((n) => [n.name, n])), [nozzles]);
-  const priceMap = useMemo(() => new Map(products.map((p) => [p.name, Number(p.current_price || 0)])), [products]);
+  const priceMap = useMemo(() => {
+    const map = new Map(products.map((p) => [p.name, Number(p.current_price || 0)]));
+    const applicableHistory = [...priceHistory]
+      .filter((row) => !form.sale_date || String(row.effective_date || '') <= form.sale_date)
+      .sort((a, b) => {
+        const byDate = String(a.effective_date || '').localeCompare(String(b.effective_date || ''));
+        if (byDate !== 0) return byDate;
+        return Number(a.id || 0) - Number(b.id || 0);
+      });
+    applicableHistory.forEach((row) => {
+      const productName = String(row.product_name || '').trim();
+      if (!productName) return;
+      map.set(productName, Number(row.new_price || 0));
+    });
+    return map;
+  }, [products, priceHistory, form.sale_date]);
   const activeDispensers = useMemo(
     () => dispensers.filter((d) => d.status === 'Operational' || d.status === 'Active' || d.status == null),
     [dispensers],
@@ -537,6 +555,12 @@ export default function Sales() {
               </div>
             </div>
           </Card>
+
+          {calculations.readings.some((row) => Number(row.unit_price || 0) <= 0 && Number(row.volume || 0) > 0) && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              One or more nozzle products do not have an effective selling price for the selected sale date. Check `Price History` or `Products` master price.
+            </div>
+          )}
 
           {formErr && <p className="text-sm text-rose-600">{formErr}</p>}
           <div className="flex justify-end gap-2">

@@ -272,9 +272,12 @@ export default async function handler(req, res) {
       return res.status(200).json(data);
     }
     if (req.method === 'POST') {
-      const rows = Array.isArray(req.body) ? req.body : [req.body];
+      let rows = Array.isArray(req.body) ? req.body : [req.body];
       validateFields(dbTable, req.body, rows);
       await checkCrossReferences(dbTable, req.body, rows, supabase);
+      if (dbTable === 'price_history') {
+        rows = await Promise.all(rows.map((row) => normalizePriceHistoryRow(row)));
+      }
       for (const row of rows) {
         await checkDuplicateFields(dbTable, row, supabase);
       }
@@ -282,11 +285,7 @@ export default async function handler(req, res) {
       if (error) throw error;
       if (dbTable === 'price_history') {
         for (const row of (Array.isArray(data) ? data : [data])) {
-          const pName = row?.product_name;
-          const newPrice = row?.new_price;
-          if (pName && newPrice != null) {
-            await supabase.from('products').update({ current_price: Number(newPrice) }).eq('name', pName);
-          }
+          await syncProductCurrentPrice(row?.product_name);
         }
       }
       return res.status(201).json(data);
@@ -294,20 +293,36 @@ export default async function handler(req, res) {
     if (req.method === 'PUT') {
       const { id } = req.body || {};
       if (!id) return res.status(400).json({ error: 'ID is required' });
-      const { id: _id, ...rest } = req.body;
+      let { id: _id, ...rest } = req.body;
       validateFields(dbTable, rest);
       await checkCrossReferences(dbTable, rest, null, supabase);
+      if (dbTable === 'price_history') {
+        rest = await normalizePriceHistoryRow(rest, id);
+      }
       await checkDuplicateFields(dbTable, rest, supabase, id);
+      const { data: beforeUpdate } = dbTable === 'price_history'
+        ? await supabase.from(dbTable).select('product_name').eq('id', id).maybeSingle()
+        : { data: null };
       const { data, error } = await supabase.from(dbTable).update(rest).eq('id', id).select().single();
       if (error) throw error;
+      if (dbTable === 'price_history') {
+        await syncProductCurrentPrice(beforeUpdate?.product_name);
+        await syncProductCurrentPrice(data?.product_name);
+      }
       return res.status(200).json(data);
     }
     if (req.method === 'DELETE') {
       const { id } = req.body || {};
       if (!id) return res.status(400).json({ error: 'ID is required' });
+      const { data: beforeDelete } = dbTable === 'price_history'
+        ? await supabase.from(dbTable).select('product_name').eq('id', id).maybeSingle()
+        : { data: null };
       await beforeDeleteCheck(dbTable, id, supabase);
       const { error } = await supabase.from(dbTable).delete().eq('id', id);
       if (error) throw error;
+      if (dbTable === 'price_history') {
+        await syncProductCurrentPrice(beforeDelete?.product_name);
+      }
       return res.status(200).json({ ok: true });
     }
     res.status(405).json({ error: 'Method not allowed' });
@@ -485,6 +500,62 @@ function optionalNumber(value, label) {
   const n = Number(value);
   if (!Number.isFinite(n)) throw new Error(`${label} must be a valid number`);
   return n;
+}
+
+async function resolvePriceBeforeOrOnDate(productName, effectiveDate, excludeId = null) {
+  let query = supabase
+    .from('price_history')
+    .select('id, new_price')
+    .eq('product_name', productName)
+    .lte('effective_date', effectiveDate)
+    .order('effective_date', { ascending: false })
+    .order('id', { ascending: false });
+  if (excludeId) query = query.neq('id', excludeId);
+  const { data: priceRow, error: priceErr } = await query.limit(1).maybeSingle();
+  if (priceErr) throw priceErr;
+  if (priceRow) return Number(priceRow.new_price || 0);
+
+  const { data: productRow, error: productErr } = await supabase
+    .from('products')
+    .select('current_price')
+    .eq('name', productName)
+    .maybeSingle();
+  if (productErr) throw productErr;
+  return Number(productRow?.current_price || 0);
+}
+
+async function normalizePriceHistoryRow(row, excludeId = null) {
+  const productName = requireText(row?.product_name, 'Product');
+  const effectiveDate = requireText(row?.effective_date, 'Effective date');
+  const newPrice = requireNonNegativeNumber(row?.new_price, 'New price');
+  const oldPrice = await resolvePriceBeforeOrOnDate(productName, effectiveDate, excludeId);
+  return {
+    product_name: productName,
+    old_price: oldPrice,
+    new_price: newPrice,
+    effective_date: effectiveDate,
+    changed_by: optionalText(row?.changed_by),
+    remarks: optionalText(row?.remarks),
+  };
+}
+
+async function syncProductCurrentPrice(productName) {
+  if (!productName) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: latestActivePrice, error: latestErr } = await supabase
+    .from('price_history')
+    .select('new_price')
+    .eq('product_name', productName)
+    .lte('effective_date', today)
+    .order('effective_date', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestErr) throw latestErr;
+  if (latestActivePrice) {
+    const { error: updErr } = await supabase.from('products').update({ current_price: Number(latestActivePrice.new_price || 0) }).eq('name', productName);
+    if (updErr) throw updErr;
+  }
 }
 
 function interpolateVolume(points, dipMM) {
@@ -711,6 +782,20 @@ async function createDailySalesEntry(payload) {
     .in('name', productNames);
   if (pErr) throw pErr;
   const priceMap = new Map((productRows || []).map((p) => [p.name, Number(p.current_price || 0)]));
+
+  const { data: priceRows, error: phErr } = await supabase
+    .from('price_history')
+    .select('id, product_name, new_price, effective_date')
+    .in('product_name', productNames)
+    .lte('effective_date', saleDate)
+    .order('effective_date', { ascending: true })
+    .order('id', { ascending: true });
+  if (phErr) throw phErr;
+  for (const row of priceRows || []) {
+    const productName = String(row.product_name || '').trim();
+    if (!productName) continue;
+    priceMap.set(productName, Number(row.new_price || 0));
+  }
 
   const normalizedReadings = [];
   let grossSalesAmount = 0;

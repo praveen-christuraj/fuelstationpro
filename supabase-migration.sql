@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS price_history (
 ALTER TABLE price_history ADD COLUMN IF NOT EXISTS old_price numeric(12,2);
 ALTER TABLE price_history ADD COLUMN IF NOT EXISTS new_price numeric(12,2);
 ALTER TABLE price_history ADD COLUMN IF NOT EXISTS changed_by text;
+ALTER TABLE price_history ADD COLUMN IF NOT EXISTS remarks text;
 ALTER TABLE price_history DROP COLUMN IF EXISTS price;
 
 -- 3. tanks
