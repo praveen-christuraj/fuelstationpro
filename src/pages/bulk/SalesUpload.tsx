@@ -10,8 +10,8 @@ export default function SalesUpload() {
     { key: 'opening_reading', label: 'Opening Reading', type: 'number', required: true, example: '120500' },
     { key: 'closing_reading', label: 'Closing Reading', type: 'number', required: true, example: '121350' },
     { key: 'testing_volume', label: 'Testing Volume', type: 'number', example: '5' },
-    { key: 'sale_volume', label: 'Sale Volume', type: 'number', required: true, example: '845' },
+    { key: 'sale_volume', label: 'Sale Volume', type: 'number', example: '845' },
     { key: 'unit_price', label: 'Unit Price', type: 'number', required: true, example: '102.50' },
-    { key: 'total_amount', label: 'Total Amount', type: 'number', required: true, example: '86612.50' },
+    { key: 'total_amount', label: 'Total Amount', type: 'number', example: '86612.50' },
   ]} />;
 }

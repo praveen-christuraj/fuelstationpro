@@ -78,7 +78,7 @@ export default function BulkUploadWizard({ title, description, endpoint, fields,
       const isClientError = /failed: 4\d\d/.test(msg);
       if (isClientError) {
         for (const row of payload) {
-          try { await apiPost(endpoint, row); ok++; } catch { fail++; }
+          try { await apiPost(endpoint, [row]); ok++; } catch { fail++; }
         }
       } else {
         fail = payload.length;
