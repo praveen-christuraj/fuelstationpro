@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, X, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
+import { Plus, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import Modal from '../../components/ui/Modal';
 import { Field, Input, Select } from '../../components/ui/Field';
@@ -7,11 +7,19 @@ import { Loading, ErrorState } from '../../components/ui/States';
 import { Badge } from '../../components/ui/Badge';
 import { apiGet, apiPost, fmtMoney, fmtNum, fmtDate } from '../../lib/api';
 
+type EntryRow = {
+  nozzle_name: string;
+  closing_reading: string;
+  testing_volume: string;
+  remarks: string;
+};
+
 export default function Sales() {
   const [entries, setEntries] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [operators, setOperators] = useState<any[]>([]);
   const [shifts, setShifts] = useState<any[]>([]);
+  const [dispensers, setDispensers] = useState<any[]>([]);
   const [nozzles, setNozzles] = useState<any[]>([]);
   const [meters, setMeters] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,21 +33,22 @@ export default function Sales() {
     sale_date: new Date().toISOString().slice(0, 10),
     shift_name: '',
     operator_name: '',
+    dispenser_name: '',
     cash_amount: '',
     online_amount: '',
     credit_amount: '',
   });
-  const [nozzleReadings, setNozzleReadings] = useState<{ nozzle_name: string; closing_reading: string }[]>([]);
-  const [testingVolumes, setTestingVolumes] = useState<{ nozzle_name: string; volume: string; remarks: string }[]>([]);
+  const [entryRows, setEntryRows] = useState<EntryRow[]>([]);
 
   const load = async () => {
     setLoading(true); setError('');
     try {
-      const [e, p, o, sh, n, m] = await Promise.all([
+      const [e, p, o, sh, d, n, m] = await Promise.all([
         apiGet('/api/daily-sales'),
         apiGet('/api/products'),
         apiGet('/api/operators'),
         apiGet('/api/shifts'),
+        apiGet('/api/dispensers'),
         apiGet('/api/nozzles'),
         apiGet('/api/meters'),
       ]);
@@ -47,6 +56,7 @@ export default function Sales() {
       setProducts(p || []);
       setOperators(o || []);
       setShifts(sh || []);
+      setDispensers(d || []);
       setNozzles(n || []);
       setMeters(m || []);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
@@ -56,36 +66,99 @@ export default function Sales() {
   const meterMap = useMemo(() => new Map(meters.map((m) => [m.nozzle_name, m])), [meters]);
   const nozzleMap = useMemo(() => new Map(nozzles.map((n) => [n.name, n])), [nozzles]);
   const priceMap = useMemo(() => new Map(products.map((p) => [p.name, Number(p.current_price || 0)])), [products]);
+  const activeDispensers = useMemo(
+    () => dispensers.filter((d) => d.status === 'Operational' || d.status === 'Active' || d.status == null),
+    [dispensers],
+  );
+  const activeOperators = useMemo(
+    () => operators.filter((o) => o.active !== false),
+    [operators],
+  );
+  const selectedNozzles = useMemo(
+    () => nozzles.filter((n) => n.dispenser_name === form.dispenser_name && (n.status === 'Active' || n.status == null)),
+    [nozzles, form.dispenser_name],
+  );
 
-  const initNozzleReadings = () => {
-    const active = nozzles.filter((n) => n.status === 'Active' || n.status == null);
-    setNozzleReadings(active.map((n) => ({ nozzle_name: n.name, closing_reading: '' })));
+  const assignedEntriesForShift = useMemo(
+    () => entries.filter((e) => e.sale_date === form.sale_date && e.shift_name === form.shift_name),
+    [entries, form.sale_date, form.shift_name],
+  );
+  const assignedOperatorNames = useMemo(
+    () => new Set(assignedEntriesForShift.map((e) => e.operator_name)),
+    [assignedEntriesForShift],
+  );
+  const assignedDispenserNames = useMemo(
+    () => new Set(assignedEntriesForShift.map((e) => e.dispenser_name).filter(Boolean)),
+    [assignedEntriesForShift],
+  );
+  const availableOperators = useMemo(
+    () => activeOperators.filter((o) => o.name === form.operator_name || !assignedOperatorNames.has(o.name)),
+    [activeOperators, assignedOperatorNames, form.operator_name],
+  );
+  const availableDispensers = useMemo(
+    () => activeDispensers.filter((d) => d.name === form.dispenser_name || !assignedDispenserNames.has(d.name)),
+    [activeDispensers, assignedDispenserNames, form.dispenser_name],
+  );
+
+  const syncEntryRowsForDispenser = (dispenserName: string) => {
+    const rows = nozzles
+      .filter((n) => n.dispenser_name === dispenserName && (n.status === 'Active' || n.status == null))
+      .map((n) => {
+        const existing = entryRows.find((row) => row.nozzle_name === n.name);
+        return existing || { nozzle_name: n.name, closing_reading: '', testing_volume: '', remarks: '' };
+      });
+    setEntryRows(rows);
   };
 
-  const addTesting = () => setTestingVolumes((prev) => [...prev, { nozzle_name: '', volume: '', remarks: '' }]);
+  const updateEntryRow = (idx: number, key: keyof EntryRow, value: string) => {
+    const next = [...entryRows];
+    next[idx] = { ...next[idx], [key]: value };
+    setEntryRows(next);
+  };
 
   const calculations = useMemo(() => {
-    const readings = nozzleReadings.map((nr) => {
-      const nozzle = nozzleMap.get(nr.nozzle_name);
-      const meter = meterMap.get(nr.nozzle_name);
+    const readings = entryRows.map((row) => {
+      const nozzle = nozzleMap.get(row.nozzle_name);
+      const meter = meterMap.get(row.nozzle_name);
       const opening = Number(meter?.current_reading || 0);
-      const closing = nr.closing_reading === '' ? null : Number(nr.closing_reading);
-      const volume = closing == null || !Number.isFinite(closing) ? 0 : Math.max(0, closing - opening);
+      const closing = row.closing_reading === '' ? null : Number(row.closing_reading);
+      const grossVolume = closing == null || !Number.isFinite(closing) ? 0 : Math.max(0, closing - opening);
+      const testingVolume = Number(row.testing_volume || 0);
+      const netVolume = Math.max(0, grossVolume - testingVolume);
       const productName = nozzle?.product_name || '';
       const unitPrice = Number(priceMap.get(productName) ?? 0);
-      const amount = volume * unitPrice;
-      return { nozzle_name: nr.nozzle_name, product_name: productName, tank_name: nozzle?.tank_name || null, dispenser_name: nozzle?.dispenser_name || null, opening, closing, volume, unit_price: unitPrice, amount };
+      const grossAmount = grossVolume * unitPrice;
+      const testingAmount = testingVolume * unitPrice;
+      const netAmount = netVolume * unitPrice;
+      return {
+        nozzle_name: row.nozzle_name,
+        product_name: productName,
+        tank_name: nozzle?.tank_name || null,
+        dispenser_name: nozzle?.dispenser_name || null,
+        opening,
+        closing,
+        volume: grossVolume,
+        testing_volume: testingVolume,
+        net_volume: netVolume,
+        unit_price: unitPrice,
+        amount: grossAmount,
+        testing_amount: testingAmount,
+        net_amount: netAmount,
+        remarks: row.remarks,
+      };
     });
 
-    const testing = testingVolumes
-      .map((tv) => {
-        const noz = nozzleMap.get(tv.nozzle_name);
-        const productName = noz?.product_name || '';
-        const unitPrice = Number(priceMap.get(productName) ?? 0);
-        const volume = Number(tv.volume || 0);
-        return { nozzle_name: tv.nozzle_name, product_name: productName, volume, unit_price: unitPrice, amount: volume * unitPrice, remarks: tv.remarks };
-      })
-      .filter((t) => t.volume > 0);
+    const testing = readings
+      .filter((r) => r.testing_volume > 0)
+      .map((r) => ({
+        nozzle_name: r.nozzle_name,
+        tank_name: r.tank_name,
+        product_name: r.product_name,
+        volume: r.testing_volume,
+        unit_price: r.unit_price,
+        amount: r.testing_amount,
+        remarks: r.remarks || null,
+      }));
 
     const grossAmount = readings.reduce((s, r) => s + Number(r.amount || 0), 0);
     const testingDeduction = testing.reduce((s, t) => s + Number(t.amount || 0), 0);
@@ -100,35 +173,61 @@ export default function Sales() {
     readings.forEach((r) => {
       if (!r.product_name) return;
       byProduct[r.product_name] = byProduct[r.product_name] || { volume: 0, testVol: 0, price: r.unit_price, amount: 0 };
-      byProduct[r.product_name].volume += Number(r.volume || 0);
-      byProduct[r.product_name].amount += Number(r.amount || 0);
+      byProduct[r.product_name].volume += Number(r.net_volume || 0);
+      byProduct[r.product_name].amount += Number(r.net_amount || 0);
     });
     testing.forEach((t) => {
       if (!t.product_name) return;
       byProduct[t.product_name] = byProduct[t.product_name] || { volume: 0, testVol: 0, price: t.unit_price, amount: 0 };
       byProduct[t.product_name].testVol += Number(t.volume || 0);
-      byProduct[t.product_name].amount -= Number(t.amount || 0);
     });
 
     return { readings, testing, byProduct, grossAmount, testingDeduction, totalSalesAmount, totalSubmitted, variance };
-  }, [nozzleReadings, testingVolumes, nozzleMap, meterMap, priceMap, form.cash_amount, form.online_amount, form.credit_amount]);
+  }, [entryRows, nozzleMap, meterMap, priceMap, form.cash_amount, form.online_amount, form.credit_amount]);
 
   const openCreate = () => {
-    setForm({ sale_date: new Date().toISOString().slice(0, 10), shift_name: '', operator_name: '', cash_amount: '', online_amount: '', credit_amount: '' });
-    setTestingVolumes([]);
+    setForm({
+      sale_date: new Date().toISOString().slice(0, 10),
+      shift_name: '',
+      operator_name: '',
+      dispenser_name: '',
+      cash_amount: '',
+      online_amount: '',
+      credit_amount: '',
+    });
+    setEntryRows([]);
     setFormErr('');
-    initNozzleReadings();
     setShowAdd(true);
   };
 
   const save = async () => {
     setFormErr('');
-    if (!form.sale_date || !form.shift_name || !form.operator_name) {
-      setFormErr('Sale date, shift and operator are required');
+    if (!form.sale_date || !form.shift_name || !form.operator_name || !form.dispenser_name) {
+      setFormErr('Sale date, shift, operator and dispenser are required');
       return;
     }
-    if (nozzleReadings.some((nr) => nr.closing_reading === '' || !Number.isFinite(Number(nr.closing_reading)))) {
-      setFormErr('Enter closing reading for all active nozzles');
+    if (assignedDispenserNames.has(form.dispenser_name)) {
+      setFormErr(`Sales already entered for dispenser ${form.dispenser_name} in ${form.shift_name} shift on ${form.sale_date}`);
+      return;
+    }
+    if (assignedOperatorNames.has(form.operator_name)) {
+      setFormErr(`Operator ${form.operator_name} is already assigned in ${form.shift_name} shift on ${form.sale_date}`);
+      return;
+    }
+    if (selectedNozzles.length === 0) {
+      setFormErr('No active nozzles found for the selected dispenser');
+      return;
+    }
+    if (entryRows.length !== selectedNozzles.length) {
+      setFormErr('Reload the dispenser selection and enter all active nozzles');
+      return;
+    }
+    if (entryRows.some((row) => row.closing_reading === '' || !Number.isFinite(Number(row.closing_reading)))) {
+      setFormErr('Enter closing reading for all active nozzles of the selected dispenser');
+      return;
+    }
+    if (calculations.readings.some((row) => Number(row.testing_volume || 0) > Number(row.volume || 0))) {
+      setFormErr('Testing quantity cannot be greater than dispensed quantity for any nozzle');
       return;
     }
     setSaving(true);
@@ -137,13 +236,14 @@ export default function Sales() {
         sale_date: form.sale_date,
         shift_name: form.shift_name,
         operator_name: form.operator_name,
+        dispenser_name: form.dispenser_name,
         cash_amount: form.cash_amount === '' ? 0 : Number(form.cash_amount),
         online_amount: form.online_amount === '' ? 0 : Number(form.online_amount),
         credit_amount: form.credit_amount === '' ? 0 : Number(form.credit_amount),
-        nozzle_readings: nozzleReadings.map((nr) => ({ nozzle_name: nr.nozzle_name, closing_reading: Number(nr.closing_reading) })),
-        testing_volumes: testingVolumes
-          .filter((tv) => Number(tv.volume || 0) > 0)
-          .map((tv) => ({ nozzle_name: tv.nozzle_name || null, volume: Number(tv.volume || 0), remarks: tv.remarks || null })),
+        nozzle_readings: entryRows.map((row) => ({ nozzle_name: row.nozzle_name, closing_reading: Number(row.closing_reading) })),
+        testing_volumes: entryRows
+          .filter((row) => Number(row.testing_volume || 0) > 0)
+          .map((row) => ({ nozzle_name: row.nozzle_name, volume: Number(row.testing_volume || 0), remarks: row.remarks || null })),
       });
       setShowAdd(false);
       await load();
@@ -178,7 +278,7 @@ export default function Sales() {
               <Card key={entry.id} className="overflow-hidden">
                 <button onClick={() => setExpandedId(isExpanded ? null : entry.id)} className="w-full px-5 py-4 flex items-center justify-between hover:bg-slate-50">
                   <div className="text-left">
-                    <p className="font-semibold text-slate-800">{fmtDate(entry.sale_date)} • {entry.shift_name} • {entry.operator_name}</p>
+                    <p className="font-semibold text-slate-800">{fmtDate(entry.sale_date)} • {entry.shift_name} • {entry.operator_name} • {entry.dispenser_name || 'Dispenser not set'}</p>
                     <p className="text-xs text-slate-500">{(entry.daily_sales_nozzle_readings || []).length} nozzle(s) • {(entry.daily_sales_testing || []).length} test(s)</p>
                   </div>
                   <div className="flex items-center gap-6">
@@ -214,23 +314,32 @@ export default function Sales() {
                             <th className="px-3 py-2 text-left">Product</th>
                             <th className="px-3 py-2 text-right">Opening</th>
                             <th className="px-3 py-2 text-right">Closing</th>
-                            <th className="px-3 py-2 text-right">Volume</th>
+                            <th className="px-3 py-2 text-right">Dispensed</th>
+                            <th className="px-3 py-2 text-right">Testing</th>
+                            <th className="px-3 py-2 text-right">Net Sale</th>
                             <th className="px-3 py-2 text-right">Rate</th>
-                            <th className="px-3 py-2 text-right">Amount</th>
+                            <th className="px-3 py-2 text-right">Net Amount</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
-                          {(entry.daily_sales_nozzle_readings || []).map((r: any) => (
+                          {(entry.daily_sales_nozzle_readings || []).map((r: any) => {
+                            const testingByNozzle = (entry.daily_sales_testing || []).find((t: any) => t.nozzle_name === r.nozzle_name);
+                            const testingVolume = Number(testingByNozzle?.volume || 0);
+                            const netVolume = Math.max(0, Number(r.volume || 0) - testingVolume);
+                            const netAmount = Number(r.amount || 0) - Number(testingByNozzle?.amount || 0);
+                            return (
                             <tr key={r.id}>
                               <td className="px-3 py-2 text-slate-700">{r.nozzle_name}</td>
                               <td className="px-3 py-2"><Badge color="blue">{r.product_name}</Badge></td>
                               <td className="px-3 py-2 text-right text-slate-600">{fmtNum(r.opening_reading, 2)}</td>
                               <td className="px-3 py-2 text-right text-slate-600">{fmtNum(r.closing_reading, 2)}</td>
                               <td className="px-3 py-2 text-right font-semibold text-slate-700">{fmtNum(r.volume, 2)} L</td>
+                              <td className="px-3 py-2 text-right text-amber-600">{fmtNum(testingVolume, 2)} L</td>
+                              <td className="px-3 py-2 text-right font-semibold text-slate-700">{fmtNum(netVolume, 2)} L</td>
                               <td className="px-3 py-2 text-right text-slate-600">{fmtMoney(r.unit_price)}</td>
-                              <td className="px-3 py-2 text-right font-semibold text-emerald-700">{fmtMoney(r.amount)}</td>
+                              <td className="px-3 py-2 text-right font-semibold text-emerald-700">{fmtMoney(netAmount)}</td>
                             </tr>
-                          ))}
+                          )})}
                         </tbody>
                       </table>
                     </div>
@@ -256,7 +365,7 @@ export default function Sales() {
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Record Daily Sales" wide>
         <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <Field label="Date" required>
               <Input type="date" value={form.sale_date || ''} onChange={(e) => setForm({ ...form, sale_date: e.target.value })} />
             </Field>
@@ -269,89 +378,93 @@ export default function Sales() {
             <Field label="Operator" required>
               <Select value={form.operator_name || ''} onChange={(e) => setForm({ ...form, operator_name: e.target.value })}>
                 <option value="">Select…</option>
-                {operators.map((o) => <option key={o.id} value={o.name}>{o.name}</option>)}
+                {availableOperators.map((o) => <option key={o.id} value={o.name}>{o.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="Dispenser" required>
+              <Select value={form.dispenser_name || ''} onChange={(e) => {
+                const dispenserName = e.target.value;
+                setForm({ ...form, dispenser_name: dispenserName });
+                syncEntryRowsForDispenser(dispenserName);
+              }}>
+                <option value="">Select…</option>
+                {availableDispensers.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
               </Select>
             </Field>
           </div>
 
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 text-xs">
-                <tr>
-                  <th className="px-3 py-2 text-left">Nozzle</th>
-                  <th className="px-3 py-2 text-left">Product</th>
-                  <th className="px-3 py-2 text-right">Opening</th>
-                  <th className="px-3 py-2 text-right">Closing</th>
-                  <th className="px-3 py-2 text-right">Volume</th>
-                  <th className="px-3 py-2 text-right">Rate</th>
-                  <th className="px-3 py-2 text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {nozzleReadings.map((nr, idx) => {
-                  const nozzle = nozzleMap.get(nr.nozzle_name);
-                  const meter = meterMap.get(nr.nozzle_name);
-                  const opening = Number(meter?.current_reading || 0);
-                  const closing = nr.closing_reading === '' ? opening : Number(nr.closing_reading);
-                  const volume = Math.max(0, closing - opening);
-                  const price = Number(priceMap.get(nozzle?.product_name || '') ?? 0);
-                  const amount = volume * price;
-                  return (
-                    <tr key={nr.nozzle_name}>
-                      <td className="px-3 py-2 text-slate-700">{nr.nozzle_name}</td>
-                      <td className="px-3 py-2"><Badge color="blue">{nozzle?.product_name || '—'}</Badge></td>
-                      <td className="px-3 py-2 text-right text-slate-600">{fmtNum(opening, 2)}</td>
-                      <td className="px-3 py-2 text-right">
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={nr.closing_reading}
-                          onChange={(e) => {
-                            const next = [...nozzleReadings];
-                            next[idx] = { ...next[idx], closing_reading: e.target.value };
-                            setNozzleReadings(next);
-                          }}
-                        />
-                      </td>
-                      <td className="px-3 py-2 text-right font-semibold text-slate-700">{fmtNum(volume, 2)} L</td>
-                      <td className="px-3 py-2 text-right text-slate-600">{fmtMoney(price)}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-emerald-700">{fmtMoney(amount)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="font-semibold text-slate-800">Testing Volumes</div>
-              <div className="text-xs text-slate-400">Deducted from sales amount, but still part of physical stock out</div>
+          {form.shift_name && form.sale_date && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {assignedDispenserNames.has(form.dispenser_name) && form.dispenser_name && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  This dispenser already has a sales entry for the selected date and shift.
+                </div>
+              )}
+              {assignedOperatorNames.has(form.operator_name) && form.operator_name && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  This operator is already assigned for the selected date and shift.
+                </div>
+              )}
             </div>
-            <button onClick={addTesting} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50">
-              <Plus className="w-4 h-4" /> Add Testing
-            </button>
-          </div>
+          )}
 
-          {testingVolumes.map((tv, idx) => (
-            <div key={idx} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
-              <Field label="Nozzle">
-                <Select value={tv.nozzle_name} onChange={(e) => { const next = [...testingVolumes]; next[idx] = { ...next[idx], nozzle_name: e.target.value }; setTestingVolumes(next); }}>
-                  <option value="">Select…</option>
-                  {nozzles.map((n) => <option key={n.id} value={n.name}>{n.name} ({n.product_name})</option>)}
-                </Select>
-              </Field>
-              <Field label="Volume (L)">
-                <Input type="number" step="0.01" value={tv.volume} onChange={(e) => { const next = [...testingVolumes]; next[idx] = { ...next[idx], volume: e.target.value }; setTestingVolumes(next); }} />
-              </Field>
-              <Field label="Remarks">
-                <Input value={tv.remarks} onChange={(e) => { const next = [...testingVolumes]; next[idx] = { ...next[idx], remarks: e.target.value }; setTestingVolumes(next); }} />
-              </Field>
-              <button onClick={() => setTestingVolumes(testingVolumes.filter((_, i) => i !== idx))} className="h-10 inline-flex items-center justify-center gap-2 px-3 rounded-lg bg-rose-50 text-rose-700 text-sm font-medium hover:bg-rose-100">
-                <X className="w-4 h-4" /> Remove
-              </button>
+          {!form.dispenser_name ? (
+            <Card className="p-8 text-center text-sm text-slate-400">
+              Select a dispenser to load only its active nozzles for sales entry.
+            </Card>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-xs">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Nozzle</th>
+                    <th className="px-3 py-2 text-left">Product</th>
+                    <th className="px-3 py-2 text-right">Opening</th>
+                    <th className="px-3 py-2 text-right">Closing</th>
+                    <th className="px-3 py-2 text-right">Dispensed</th>
+                    <th className="px-3 py-2 text-right">Testing</th>
+                    <th className="px-3 py-2 text-right">Net Sale</th>
+                    <th className="px-3 py-2 text-right">Rate</th>
+                    <th className="px-3 py-2 text-right">Net Amount</th>
+                    <th className="px-3 py-2 text-left">Remarks</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {entryRows.map((row, idx) => {
+                    const nozzle = nozzleMap.get(row.nozzle_name);
+                    const meter = meterMap.get(row.nozzle_name);
+                    const opening = Number(meter?.current_reading || 0);
+                    const closing = row.closing_reading === '' ? opening : Number(row.closing_reading);
+                    const dispensed = Math.max(0, closing - opening);
+                    const testing = Number(row.testing_volume || 0);
+                    const netVolume = Math.max(0, dispensed - testing);
+                    const price = Number(priceMap.get(nozzle?.product_name || '') ?? 0);
+                    const amount = netVolume * price;
+                    return (
+                      <tr key={row.nozzle_name}>
+                        <td className="px-3 py-2 text-slate-700">{row.nozzle_name}</td>
+                        <td className="px-3 py-2"><Badge color="blue">{nozzle?.product_name || '—'}</Badge></td>
+                        <td className="px-3 py-2 text-right text-slate-600">{fmtNum(opening, 2)}</td>
+                        <td className="px-3 py-2 text-right">
+                          <Input type="number" step="0.01" value={row.closing_reading} onChange={(e) => updateEntryRow(idx, 'closing_reading', e.target.value)} />
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-slate-700">{fmtNum(dispensed, 2)} L</td>
+                        <td className="px-3 py-2 text-right">
+                          <Input type="number" step="0.01" min="0" value={row.testing_volume} onChange={(e) => updateEntryRow(idx, 'testing_volume', e.target.value)} />
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-slate-700">{fmtNum(netVolume, 2)} L</td>
+                        <td className="px-3 py-2 text-right text-slate-600">{fmtMoney(price)}</td>
+                        <td className="px-3 py-2 text-right font-semibold text-emerald-700">{fmtMoney(amount)}</td>
+                        <td className="px-3 py-2">
+                          <Input value={row.remarks} onChange={(e) => updateEntryRow(idx, 'remarks', e.target.value)} placeholder="Optional" />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          ))}
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Field label="Cash Amount (₹)">
@@ -366,7 +479,15 @@ export default function Sales() {
           </div>
 
           <Card className="p-4 bg-slate-50 border-slate-100">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              <div>
+                <div className="text-xs text-slate-400">Gross Amount</div>
+                <div className="text-lg font-bold text-slate-800">{fmtMoney(calculations.grossAmount)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-400">Testing Deduction</div>
+                <div className="text-lg font-bold text-amber-600">-{fmtMoney(calculations.testingDeduction)}</div>
+              </div>
               <div>
                 <div className="text-xs text-slate-400">Total Sales (after testing)</div>
                 <div className="text-lg font-bold text-slate-800">{fmtMoney(calculations.totalSalesAmount)}</div>

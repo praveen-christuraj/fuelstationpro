@@ -4,13 +4,14 @@ export default function DailySalesUpload() {
   return (
     <BulkUploadWizard
       title="Bulk Daily Sales Upload"
-      description="Import grouped daily sales with operator cash/online/credit reconciliation. Rows are grouped by (sale_date, shift_name, operator_name)."
+      description="Import grouped daily sales with dispenser-wise reconciliation. Rows are grouped by (sale_date, shift_name, operator_name, dispenser_name), and each row should represent one nozzle of the selected dispenser."
       endpoint="/api/daily-sales/import"
       templateName="daily_sales"
       fields={[
         { key: 'sale_date', label: 'Sale Date', type: 'date', required: true, example: '2026-06-01' },
         { key: 'shift_name', label: 'Shift', required: true, example: 'Morning' },
         { key: 'operator_name', label: 'Operator', required: true, example: 'Ramesh Kumar' },
+        { key: 'dispenser_name', label: 'Dispenser', required: true, example: 'Dispenser 1' },
         { key: 'nozzle_name', label: 'Nozzle', required: true, example: 'Nozzle 1A' },
         { key: 'closing_reading', label: 'Closing Reading', type: 'number', required: true, example: '121350' },
         { key: 'testing_volume', label: 'Testing Volume', type: 'number', example: '5' },
@@ -22,4 +23,3 @@ export default function DailySalesUpload() {
     />
   );
 }
-

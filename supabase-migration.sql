@@ -2,31 +2,6 @@
 -- Uses CREATE TABLE IF NOT EXISTS for new tables
 -- Uses ALTER TABLE ... ADD COLUMN IF NOT EXISTS for columns on existing tables
 
--- ===== UNIQUE CONSTRAINTS (applied after all table creations) =====
--- Products
-ALTER TABLE products ADD CONSTRAINT IF NOT EXISTS products_name_key UNIQUE (name);
-ALTER TABLE products ADD CONSTRAINT IF NOT EXISTS products_code_key UNIQUE (code);
--- Tanks
-ALTER TABLE tanks ADD CONSTRAINT IF NOT EXISTS tanks_name_key UNIQUE (name);
-ALTER TABLE tanks ADD CONSTRAINT IF NOT EXISTS tanks_code_key UNIQUE (code);
--- Dispensers
-ALTER TABLE dispensers ADD CONSTRAINT IF NOT EXISTS dispensers_name_key UNIQUE (name);
-ALTER TABLE dispensers ADD CONSTRAINT IF NOT EXISTS dispensers_code_key UNIQUE (code);
--- Nozzles
-ALTER TABLE nozzles ADD CONSTRAINT IF NOT EXISTS nozzles_name_key UNIQUE (name);
-ALTER TABLE nozzles ADD CONSTRAINT IF NOT EXISTS nozzles_code_key UNIQUE (code);
--- Operators
-ALTER TABLE operators ADD CONSTRAINT IF NOT EXISTS operators_name_key UNIQUE (name);
-ALTER TABLE operators ADD CONSTRAINT IF NOT EXISTS operators_emp_code_key UNIQUE (emp_code);
--- Shifts
-ALTER TABLE shifts ADD CONSTRAINT IF NOT EXISTS shifts_name_key UNIQUE (name);
--- Suppliers
-ALTER TABLE suppliers ADD CONSTRAINT IF NOT EXISTS suppliers_name_key UNIQUE (name);
--- Meters
-ALTER TABLE meters ADD CONSTRAINT IF NOT EXISTS meters_serial_no_key UNIQUE (serial_no);
--- Bank Accounts
-ALTER TABLE bank_accounts ADD CONSTRAINT IF NOT EXISTS bank_accounts_account_no_key UNIQUE (account_no);
-
 -- 1. products
 CREATE TABLE IF NOT EXISTS products (
   id bigint primary key generated always as identity,
@@ -86,11 +61,9 @@ CREATE TABLE IF NOT EXISTS tank_calibration (
   unique (tank_id, dip_mm)
 );
 ALTER TABLE tank_calibration ADD COLUMN IF NOT EXISTS dip_mm numeric(10,2);
-UPDATE tank_calibration SET dip_mm = dip_cm * 10 WHERE dip_mm IS NULL AND dip_cm IS NOT NULL;
+DO $$BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tank_calibration' AND column_name = 'dip_cm') THEN UPDATE tank_calibration SET dip_mm = dip_cm * 10 WHERE dip_mm IS NULL AND dip_cm IS NOT NULL; END IF; END$$;
 ALTER TABLE tank_calibration DROP CONSTRAINT IF EXISTS tank_calibration_tank_id_dip_cm_key;
 CREATE INDEX IF NOT EXISTS idx_tank_calibration_tank_dip on tank_calibration (tank_id, dip_mm);
--- Drop the legacy dip_cm column (migrated to dip_mm)
-ALTER TABLE tank_calibration ALTER COLUMN dip_cm DROP NOT NULL;
 ALTER TABLE tank_calibration DROP COLUMN IF EXISTS dip_cm;
 
 -- 5. dispensers
@@ -312,6 +285,7 @@ CREATE TABLE IF NOT EXISTS daily_sales_entries (
   sale_date date not null,
   shift_name text not null,
   operator_name text not null,
+  dispenser_name text,
   cash_amount numeric(14,2) default 0,
   online_amount numeric(14,2) default 0,
   credit_amount numeric(14,2) default 0,
@@ -321,7 +295,11 @@ CREATE TABLE IF NOT EXISTS daily_sales_entries (
   status text default 'submitted',
   created_at timestamptz default now()
 );
+ALTER TABLE daily_sales_entries ADD COLUMN IF NOT EXISTS dispenser_name text;
 create index if not exists idx_daily_sales_entries_date on daily_sales_entries (sale_date desc);
+create index if not exists idx_daily_sales_entries_dispenser on daily_sales_entries (dispenser_name);
+create unique index if not exists uq_daily_sales_entry_shift_dispenser on daily_sales_entries (sale_date, shift_name, dispenser_name) where dispenser_name is not null;
+create unique index if not exists uq_daily_sales_entry_shift_operator on daily_sales_entries (sale_date, shift_name, operator_name);
 
 -- 20. daily_sales_nozzle_readings
 CREATE TABLE IF NOT EXISTS daily_sales_nozzle_readings (
@@ -389,3 +367,21 @@ CREATE TABLE IF NOT EXISTS cash_deposits (
   created_at timestamptz default now()
 );
 create index if not exists idx_cash_deposits_date on cash_deposits (deposit_date desc);
+
+-- ===== UNIQUE CONSTRAINTS (DO block for idempotent add) =====
+DO $$BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_name_key') THEN ALTER TABLE products ADD CONSTRAINT products_name_key UNIQUE (name); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_code_key') THEN ALTER TABLE products ADD CONSTRAINT products_code_key UNIQUE (code); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tanks_name_key') THEN ALTER TABLE tanks ADD CONSTRAINT tanks_name_key UNIQUE (name); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tanks_code_key') THEN ALTER TABLE tanks ADD CONSTRAINT tanks_code_key UNIQUE (code); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'dispensers_name_key') THEN ALTER TABLE dispensers ADD CONSTRAINT dispensers_name_key UNIQUE (name); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'dispensers_code_key') THEN ALTER TABLE dispensers ADD CONSTRAINT dispensers_code_key UNIQUE (code); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'nozzles_name_key') THEN ALTER TABLE nozzles ADD CONSTRAINT nozzles_name_key UNIQUE (name); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'nozzles_code_key') THEN ALTER TABLE nozzles ADD CONSTRAINT nozzles_code_key UNIQUE (code); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'operators_name_key') THEN ALTER TABLE operators ADD CONSTRAINT operators_name_key UNIQUE (name); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'operators_emp_code_key') THEN ALTER TABLE operators ADD CONSTRAINT operators_emp_code_key UNIQUE (emp_code); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shifts_name_key') THEN ALTER TABLE shifts ADD CONSTRAINT shifts_name_key UNIQUE (name); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'suppliers_name_key') THEN ALTER TABLE suppliers ADD CONSTRAINT suppliers_name_key UNIQUE (name); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'meters_serial_no_key') THEN ALTER TABLE meters ADD CONSTRAINT meters_serial_no_key UNIQUE (serial_no); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bank_accounts_account_no_key') THEN ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_account_no_key UNIQUE (account_no); END IF;
+END$$;

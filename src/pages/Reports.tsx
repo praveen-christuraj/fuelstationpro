@@ -14,6 +14,8 @@ export default function Reports() {
   const [error, setError] = useState('');
   const [period, setPeriod] = useState<Period>('monthly');
   const [productFilter, setProductFilter] = useState('all');
+  const [operatorFilter, setOperatorFilter] = useState('all');
+  const [dispenserFilter, setDispenserFilter] = useState('all');
 
   const load = async () => {
     setLoading(true);
@@ -37,8 +39,24 @@ export default function Reports() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [dailySales]);
 
+  const operators = useMemo(() => {
+    return Array.from(new Set((dailySales || []).map((e) => e.operator_name).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }, [dailySales]);
+
+  const dispensers = useMemo(() => {
+    return Array.from(new Set((dailySales || []).map((e) => e.dispenser_name).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }, [dailySales]);
+
+  const filteredEntries = useMemo(() => {
+    return (dailySales || []).filter((e) => {
+      if (operatorFilter !== 'all' && e.operator_name !== operatorFilter) return false;
+      if (dispenserFilter !== 'all' && e.dispenser_name !== dispenserFilter) return false;
+      return true;
+    });
+  }, [dailySales, operatorFilter, dispenserFilter]);
+
   const derived = useMemo(() => {
-    return (dailySales || []).map((e) => {
+    return filteredEntries.map((e) => {
       const soldByProduct: Record<string, { volume: number; amount: number }> = {};
       const testByProduct: Record<string, { volume: number; amount: number }> = {};
       (e.daily_sales_nozzle_readings || []).forEach((r: any) => {
@@ -62,7 +80,7 @@ export default function Reports() {
       const netVolumeTotal = Object.values(netByProduct).reduce((s, v) => s + Number(v.volume || 0), 0);
       return { entry: e, netByProduct, netVolumeTotal };
     });
-  }, [dailySales]);
+  }, [filteredEntries]);
 
   const bucketKey = (d: string) => {
     const date = new Date(d);
@@ -119,6 +137,8 @@ export default function Reports() {
           <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-600"><Filter className="w-4 h-4" /> Filters</span>
           <div className="inline-flex rounded-lg border border-slate-200 p-0.5">{(['daily', 'monthly', 'quarterly', 'yearly'] as Period[]).map((p) => <button key={p} onClick={() => setPeriod(p)} className={`px-3 py-1.5 rounded-md text-sm font-medium capitalize ${period === p ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>{p}</button>)}</div>
           <select value={productFilter} onChange={(e) => setProductFilter(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm bg-white"><option value="all">All Products</option>{products.map((p) => <option key={p} value={p}>{p}</option>)}</select>
+          <select value={operatorFilter} onChange={(e) => setOperatorFilter(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm bg-white"><option value="all">All Operators</option>{operators.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+          <select value={dispenserFilter} onChange={(e) => setDispenserFilter(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm bg-white"><option value="all">All Dispensers</option>{dispensers.map((d) => <option key={d} value={d}>{d}</option>)}</select>
         </div>
       </Card>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

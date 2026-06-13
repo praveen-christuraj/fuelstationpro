@@ -40,6 +40,7 @@ const REFERENCE_MAP = {
   ],
   dispensers: [
     { table: 'nozzles', column: 'dispenser_name', label: 'nozzles' },
+    { table: 'daily_sales_entries', column: 'dispenser_name', label: 'daily sales entries' },
     { table: 'daily_sales_nozzle_readings', column: 'dispenser_name', label: 'daily sales nozzle readings' },
   ],
   nozzles: [
@@ -585,7 +586,7 @@ async function handleTankerUnloadingCreateV2(req, res) {
 async function handleDailySalesList(req, res) {
   const { data, error } = await supabase
     .from('daily_sales_entries')
-    .select('id, sale_date, shift_name, operator_name, cash_amount, online_amount, credit_amount, total_submitted, total_sales_amount, variance, status, created_at, daily_sales_nozzle_readings ( id, nozzle_name, dispenser_name, tank_name, product_name, opening_reading, closing_reading, volume, unit_price, amount ), daily_sales_testing ( id, nozzle_name, tank_name, product_name, volume, unit_price, amount, remarks )')
+    .select('id, sale_date, shift_name, operator_name, dispenser_name, cash_amount, online_amount, credit_amount, total_submitted, total_sales_amount, variance, status, created_at, daily_sales_nozzle_readings ( id, nozzle_name, dispenser_name, tank_name, product_name, opening_reading, closing_reading, volume, unit_price, amount ), daily_sales_testing ( id, nozzle_name, tank_name, product_name, volume, unit_price, amount, remarks )')
     .order('id', { ascending: false });
   if (error) throw error;
   return res.status(200).json(data || []);
@@ -601,6 +602,7 @@ async function createDailySalesEntry(payload) {
   const saleDate = requireText(body.sale_date, 'Sale date');
   const shiftName = requireText(body.shift_name, 'Shift');
   const operatorName = requireText(body.operator_name, 'Operator');
+  const dispenserName = requireText(body.dispenser_name, 'Dispenser');
   const cashAmount = optionalNumber(body.cash_amount, 'Cash amount') ?? 0;
   const onlineAmount = optionalNumber(body.online_amount, 'Online amount') ?? 0;
   const creditAmount = optionalNumber(body.credit_amount, 'Credit amount') ?? 0;
@@ -608,18 +610,88 @@ async function createDailySalesEntry(payload) {
   const testingVolumes = Array.isArray(body.testing_volumes) ? body.testing_volumes : [];
   if (nozzleReadings.length === 0) throw new Error('At least one nozzle reading is required');
 
-  const nozzleNames = [...new Set(nozzleReadings.map((r) => String(r?.nozzle_name ?? '').trim()).filter(Boolean))];
+  const { data: dispenserRow, error: dispenserErr } = await supabase
+    .from('dispensers')
+    .select('name, status')
+    .eq('name', dispenserName)
+    .maybeSingle();
+  if (dispenserErr) throw dispenserErr;
+  if (!dispenserRow) throw new Error(`Dispenser not found: ${dispenserName}`);
+  if (dispenserRow.status && !['Operational', 'Active'].includes(String(dispenserRow.status))) {
+    throw new Error(`Dispenser is not available for sales entry: ${dispenserName}`);
+  }
+
+  const { data: operatorRow, error: operatorErr } = await supabase
+    .from('operators')
+    .select('name, active')
+    .eq('name', operatorName)
+    .maybeSingle();
+  if (operatorErr) throw operatorErr;
+  if (!operatorRow) throw new Error(`Operator not found: ${operatorName}`);
+  if (operatorRow.active === false) throw new Error(`Operator is inactive: ${operatorName}`);
+
+  const { data: shiftRow, error: shiftErr } = await supabase
+    .from('shifts')
+    .select('name')
+    .eq('name', shiftName)
+    .maybeSingle();
+  if (shiftErr) throw shiftErr;
+  if (!shiftRow) throw new Error(`Shift not found: ${shiftName}`);
+
+  const { data: existingDispenserEntry, error: existingDispenserErr } = await supabase
+    .from('daily_sales_entries')
+    .select('id, operator_name')
+    .eq('sale_date', saleDate)
+    .eq('shift_name', shiftName)
+    .eq('dispenser_name', dispenserName)
+    .maybeSingle();
+  if (existingDispenserErr) throw existingDispenserErr;
+  if (existingDispenserEntry) {
+    throw new Error(`Sales entry already exists for ${saleDate}, ${shiftName}, dispenser ${dispenserName}`);
+  }
+
+  const { data: existingOperatorEntry, error: existingOperatorErr } = await supabase
+    .from('daily_sales_entries')
+    .select('id, dispenser_name')
+    .eq('sale_date', saleDate)
+    .eq('shift_name', shiftName)
+    .eq('operator_name', operatorName)
+    .maybeSingle();
+  if (existingOperatorErr) throw existingOperatorErr;
+  if (existingOperatorEntry) {
+    throw new Error(`Operator ${operatorName} is already assigned to dispenser ${existingOperatorEntry.dispenser_name || 'another dispenser'} for ${shiftName} on ${saleDate}`);
+  }
+
+  const nozzleNames = nozzleReadings.map((r) => String(r?.nozzle_name ?? '').trim()).filter(Boolean);
+  if (new Set(nozzleNames).size !== nozzleNames.length) {
+    throw new Error('Each nozzle can be entered only once in a sales entry');
+  }
+
   const { data: nozzleRows, error: nozErr } = await supabase
     .from('nozzles')
     .select('name, dispenser_name, tank_name, product_name, status')
-    .in('name', nozzleNames);
+    .eq('dispenser_name', dispenserName);
   if (nozErr) throw nozErr;
   const nozzleMap = new Map((nozzleRows || []).map((n) => [n.name, n]));
+  const activeNozzles = (nozzleRows || []).filter((n) => n.status === 'Active' || n.status == null);
+  if (activeNozzles.length === 0) {
+    throw new Error(`No active nozzles found for dispenser ${dispenserName}`);
+  }
+
+  const activeNozzleNames = activeNozzles.map((n) => n.name);
+  const missingNozzles = activeNozzleNames.filter((name) => !nozzleNames.includes(name));
+  if (missingNozzles.length > 0) {
+    throw new Error(`Enter closing reading for all active nozzles of ${dispenserName}: ${missingNozzles.join(', ')}`);
+  }
+  const invalidNozzles = nozzleNames.filter((name) => !activeNozzleNames.includes(name));
+  if (invalidNozzles.length > 0) {
+    throw new Error(`Only active nozzles of dispenser ${dispenserName} can be entered: ${invalidNozzles.join(', ')}`);
+  }
 
   const { data: meterRows, error: mErr } = await supabase
     .from('meters')
     .select('id, nozzle_name, current_reading')
-    .in('nozzle_name', nozzleNames);
+    .in('nozzle_name', activeNozzleNames);
   if (mErr) throw mErr;
   const meterMap = new Map((meterRows || []).map((m) => [m.nozzle_name, m]));
 
@@ -650,7 +722,7 @@ async function createDailySalesEntry(payload) {
     grossSalesAmount += amount;
     normalizedReadings.push({
       nozzle_name: nozzleName,
-      dispenser_name: nozzle.dispenser_name || null,
+      dispenser_name: dispenserName,
       tank_name: nozzle.tank_name || null,
       product_name: nozzle.product_name,
       opening_reading: opening,
@@ -666,19 +738,15 @@ async function createDailySalesEntry(payload) {
   for (let i = 0; i < testingVolumes.length; i++) {
     const t = testingVolumes[i] || {};
     const label = `Testing row ${i + 1}: `;
-    const nozzleName = optionalText(t.nozzle_name);
-    const productName = optionalText(t.product_name);
+    const nozzleName = requireText(t.nozzle_name, `${label}Nozzle`);
     const volume = requireNonNegativeNumber(t.volume, `${label}Volume`);
     const remarks = optionalText(t.remarks);
-    let resolvedProduct = productName;
-    let resolvedTank = null;
-    if (nozzleName) {
-      const noz = nozzleMap.get(nozzleName);
-      if (!noz) throw new Error(`${label}Nozzle not found: ${nozzleName}`);
-      resolvedProduct = resolvedProduct || noz.product_name;
-      resolvedTank = noz.tank_name || null;
+    const noz = nozzleMap.get(nozzleName);
+    if (!noz || noz.dispenser_name !== dispenserName) {
+      throw new Error(`${label}Nozzle does not belong to dispenser ${dispenserName}: ${nozzleName}`);
     }
-    if (!resolvedProduct) throw new Error(`${label}Product is required`);
+    const resolvedProduct = noz.product_name;
+    const resolvedTank = noz.tank_name || null;
     const price = Number(priceMap.get(resolvedProduct) ?? 0);
     const amount = volume * price;
     testingDeduction += amount;
@@ -703,6 +771,7 @@ async function createDailySalesEntry(payload) {
       sale_date: saleDate,
       shift_name: shiftName,
       operator_name: operatorName,
+      dispenser_name: dispenserName,
       cash_amount: cashAmount,
       online_amount: onlineAmount,
       credit_amount: creditAmount,
@@ -777,9 +846,10 @@ async function handleDailySalesImport(req, res) {
     const saleDate = requireText(row.sale_date ?? row.date, 'Sale date');
     const shiftName = requireText(row.shift_name, 'Shift');
     const operatorName = requireText(row.operator_name, 'Operator');
-    const key = `${saleDate}||${shiftName}||${operatorName}`;
+    const dispenserName = requireText(row.dispenser_name, 'Dispenser');
+    const key = `${saleDate}||${shiftName}||${operatorName}||${dispenserName}`;
     if (!groups.has(key)) {
-      groups.set(key, { sale_date: saleDate, shift_name: shiftName, operator_name: operatorName, cash_amount: 0, online_amount: 0, credit_amount: 0, nozzle_readings: [], testing_volumes: [] });
+      groups.set(key, { sale_date: saleDate, shift_name: shiftName, operator_name: operatorName, dispenser_name: dispenserName, cash_amount: 0, online_amount: 0, credit_amount: 0, nozzle_readings: [], testing_volumes: [] });
     }
     const g = groups.get(key);
     const nozzleName = requireText(row.nozzle_name, 'Nozzle');
@@ -802,10 +872,10 @@ async function handleDailySalesImport(req, res) {
     try {
       const entryId = await createDailySalesEntry(g);
       ok++;
-      results.push({ entry_id: entryId, sale_date: g.sale_date, shift_name: g.shift_name, operator_name: g.operator_name });
+      results.push({ entry_id: entryId, sale_date: g.sale_date, shift_name: g.shift_name, operator_name: g.operator_name, dispenser_name: g.dispenser_name });
     } catch (e) {
       fail++;
-      results.push({ error: String(e?.message || e), sale_date: g.sale_date, shift_name: g.shift_name, operator_name: g.operator_name });
+      results.push({ error: String(e?.message || e), sale_date: g.sale_date, shift_name: g.shift_name, operator_name: g.operator_name, dispenser_name: g.dispenser_name });
     }
   }
   return res.status(200).json({ groups: groups.size, ok, fail, results });

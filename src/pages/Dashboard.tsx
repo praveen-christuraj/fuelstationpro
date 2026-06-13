@@ -183,20 +183,21 @@ export default function Dashboard() {
         <CardHeader title="Recent Sales Activity" subtitle="Latest shift entries" action={<a href="/ops/sales" className="text-xs text-blue-600 hover:underline inline-flex items-center gap-0.5">View all <ArrowUpRight className="w-3 h-3" /></a>} />
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead><tr className="text-left text-xs font-semibold text-slate-500 uppercase border-b border-slate-100 bg-slate-50/50"><th className="px-5 py-3">Date</th><th className="px-5 py-3">Shift</th><th className="px-5 py-3">Operator</th><th className="px-5 py-3 text-right">Amount</th><th className="px-5 py-3 text-right">Variance</th></tr></thead>
+            <thead><tr className="text-left text-xs font-semibold text-slate-500 uppercase border-b border-slate-100 bg-slate-50/50"><th className="px-5 py-3">Date</th><th className="px-5 py-3">Shift</th><th className="px-5 py-3">Operator</th><th className="px-5 py-3">Dispenser</th><th className="px-5 py-3 text-right">Amount</th><th className="px-5 py-3 text-right">Variance</th></tr></thead>
             <tbody className="divide-y divide-slate-50">
               {dailySales.slice(0, 6).map((s) => (
                 <tr key={s.id} className="hover:bg-slate-50/60">
                   <td className="px-5 py-3 text-slate-600">{fmtDate(s.sale_date)}</td>
                   <td className="px-5 py-3"><Badge color="blue">{s.shift_name}</Badge></td>
                   <td className="px-5 py-3 text-slate-600">{s.operator_name}</td>
+                  <td className="px-5 py-3 text-slate-600">{s.dispenser_name || '—'}</td>
                   <td className="px-5 py-3 text-right font-medium text-slate-800">{fmtMoney(s.total_sales_amount)}</td>
                   <td className="px-5 py-3 text-right">
                     <span className={`font-semibold ${Number(s.variance || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{Number(s.variance || 0) >= 0 ? '+' : ''}{fmtMoney(s.variance)}</span>
                   </td>
                 </tr>
               ))}
-              {dailySales.length === 0 && <tr><td colSpan={5} className="px-5 py-10 text-center text-slate-400 text-sm">No sales recorded yet</td></tr>}
+              {dailySales.length === 0 && <tr><td colSpan={6} className="px-5 py-10 text-center text-slate-400 text-sm">No sales recorded yet</td></tr>}
             </tbody>
           </table>
         </div>
