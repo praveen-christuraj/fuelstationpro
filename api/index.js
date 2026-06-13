@@ -280,6 +280,15 @@ export default async function handler(req, res) {
       }
       const { data, error } = await supabase.from(dbTable).insert(rows).select();
       if (error) throw error;
+      if (dbTable === 'price_history') {
+        for (const row of (Array.isArray(data) ? data : [data])) {
+          const pName = row?.product_name;
+          const newPrice = row?.new_price;
+          if (pName && newPrice != null) {
+            await supabase.from('products').update({ current_price: Number(newPrice) }).eq('name', pName);
+          }
+        }
+      }
       return res.status(201).json(data);
     }
     if (req.method === 'PUT') {
