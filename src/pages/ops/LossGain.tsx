@@ -54,8 +54,6 @@ export default function LossGain() {
     catch (e: any) { setError(e.message); } finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
-  if (loading) return <Loading />;
-  if (error) return <ErrorState message={error} onRetry={load} />;
 
   const quarterKey = (d: string) => {
     const dt = new Date(d);
@@ -214,6 +212,9 @@ export default function LossGain() {
   const reconciledTanks = byTankRows.filter((r) => r.variance != null).length;
   const varianceBars = byTankRows.filter((r) => r.variance != null).map((r) => ({ label: r.tank.slice(0, 10), value: Math.round(Number(r.variance || 0)) }));
   const trendBars = breakdownRows.map((r) => ({ label: r.label.slice(-7), value: Math.round(r.variance || 0) }));
+
+  if (loading) return <Loading />;
+  if (error) return <ErrorState message={error} onRetry={load} />;
 
   return (
     <div className="space-y-4">

@@ -72,19 +72,45 @@ export default function Sales() {
   const meterMap = useMemo(() => new Map(meters.map((m) => [m.nozzle_name, m])), [meters]);
   const nozzleMap = useMemo(() => new Map(nozzles.map((n) => [n.name, n])), [nozzles]);
   const priceMap = useMemo(() => {
-    const map = new Map(products.map((p) => [p.name, Number(p.current_price || 0)]));
-    const applicableHistory = [...priceHistory]
-      .filter((row) => !form.sale_date || String(row.effective_date || '') <= form.sale_date)
+    const targetDate = form.sale_date || new Date().toISOString().slice(0, 10);
+    const map = new Map<string, number>();
+    const fallbackByProduct = new Map(products.map((p) => [String(p.name || '').trim(), Number(p.current_price || 0)]));
+    const historyByProduct = new Map<string, any[]>();
+
+    [...priceHistory]
       .sort((a, b) => {
         const byDate = String(a.effective_date || '').localeCompare(String(b.effective_date || ''));
         if (byDate !== 0) return byDate;
         return Number(a.id || 0) - Number(b.id || 0);
+      })
+      .forEach((row) => {
+        const productName = String(row.product_name || '').trim();
+        if (!productName) return;
+        if (!historyByProduct.has(productName)) historyByProduct.set(productName, []);
+        historyByProduct.get(productName)!.push(row);
       });
-    applicableHistory.forEach((row) => {
-      const productName = String(row.product_name || '').trim();
-      if (!productName) return;
-      map.set(productName, Number(row.new_price || 0));
+
+    const productNames = new Set([...fallbackByProduct.keys(), ...historyByProduct.keys()]);
+    productNames.forEach((productName) => {
+      const history = historyByProduct.get(productName) || [];
+      const fallbackPrice = Number(fallbackByProduct.get(productName) || 0);
+      if (history.length === 0) {
+        map.set(productName, fallbackPrice);
+        return;
+      }
+
+      let resolvedPrice = Number(history[0]?.old_price ?? fallbackPrice);
+      if (!Number.isFinite(resolvedPrice)) resolvedPrice = fallbackPrice;
+
+      history.forEach((row) => {
+        if (String(row.effective_date || '') <= targetDate) {
+          resolvedPrice = Number(row.new_price || 0);
+        }
+      });
+
+      map.set(productName, resolvedPrice);
     });
+
     return map;
   }, [products, priceHistory, form.sale_date]);
   const activeDispensers = useMemo(

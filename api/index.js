@@ -615,6 +615,58 @@ async function syncProductCurrentPrice(productName) {
   }
 }
 
+async function loadEffectivePriceMap(productNames, targetDate) {
+  const uniqueNames = [...new Set((productNames || []).map((name) => String(name || '').trim()).filter(Boolean))];
+  const priceMap = new Map();
+  if (uniqueNames.length === 0) return priceMap;
+
+  const { data: productRows, error: productErr } = await supabase
+    .from('products')
+    .select('name, current_price')
+    .in('name', uniqueNames);
+  if (productErr) throw productErr;
+
+  const fallbackPriceByProduct = new Map((productRows || []).map((row) => [String(row.name || '').trim(), Number(row.current_price || 0)]));
+  const { data: historyRows, error: historyErr } = await supabase
+    .from('price_history')
+    .select('id, product_name, old_price, new_price, effective_date')
+    .in('product_name', uniqueNames)
+    .order('product_name', { ascending: true })
+    .order('effective_date', { ascending: true })
+    .order('id', { ascending: true });
+  if (historyErr) throw historyErr;
+
+  const historyByProduct = new Map();
+  for (const row of historyRows || []) {
+    const productName = String(row.product_name || '').trim();
+    if (!productName) continue;
+    if (!historyByProduct.has(productName)) historyByProduct.set(productName, []);
+    historyByProduct.get(productName).push(row);
+  }
+
+  for (const productName of uniqueNames) {
+    const history = historyByProduct.get(productName) || [];
+    const fallbackPrice = Number(fallbackPriceByProduct.get(productName) || 0);
+    if (history.length === 0) {
+      priceMap.set(productName, fallbackPrice);
+      continue;
+    }
+
+    const firstRow = history[0];
+    let resolvedPrice = Number(firstRow.old_price ?? fallbackPrice);
+    if (!Number.isFinite(resolvedPrice)) resolvedPrice = fallbackPrice;
+
+    for (const row of history) {
+      if (String(row.effective_date || '') > targetDate) break;
+      resolvedPrice = Number(row.new_price || 0);
+    }
+
+    priceMap.set(productName, resolvedPrice);
+  }
+
+  return priceMap;
+}
+
 function interpolateVolume(points, dipMM) {
   const d = Number(dipMM);
   if (!Array.isArray(points) || points.length < 2 || !Number.isFinite(d)) return null;
@@ -1054,26 +1106,7 @@ async function createDailySalesEntry(payload, opts = {}) {
   const meterMap = new Map((meterRows || []).map((m) => [m.nozzle_name, m]));
 
   const productNames = [...new Set((nozzleRows || []).map((n) => String(n.product_name || '').trim()).filter(Boolean))];
-  const { data: productRows, error: pErr } = await supabase
-    .from('products')
-    .select('name, current_price')
-    .in('name', productNames);
-  if (pErr) throw pErr;
-  const priceMap = new Map((productRows || []).map((p) => [p.name, Number(p.current_price || 0)]));
-
-  const { data: priceRows, error: phErr } = await supabase
-    .from('price_history')
-    .select('id, product_name, new_price, effective_date')
-    .in('product_name', productNames)
-    .lte('effective_date', saleDate)
-    .order('effective_date', { ascending: true })
-    .order('id', { ascending: true });
-  if (phErr) throw phErr;
-  for (const row of priceRows || []) {
-    const productName = String(row.product_name || '').trim();
-    if (!productName) continue;
-    priceMap.set(productName, Number(row.new_price || 0));
-  }
+  const priceMap = await loadEffectivePriceMap(productNames, saleDate);
 
   const normalizedReadings = [];
   let grossSalesAmount = 0;
@@ -1297,26 +1330,7 @@ async function updateDailySalesEntry(entryId, payload) {
   const nozzleMap = new Map((nozzleRows || []).map((n) => [n.name, n]));
 
   const productNames = [...new Set((nozzleRows || []).map((n) => String(n.product_name || '').trim()).filter(Boolean))];
-  const { data: productRows, error: pErr } = await supabase
-    .from('products')
-    .select('name, current_price')
-    .in('name', productNames);
-  if (pErr) throw pErr;
-  const priceMap = new Map((productRows || []).map((p) => [p.name, Number(p.current_price || 0)]));
-
-  const { data: priceRows, error: phErr } = await supabase
-    .from('price_history')
-    .select('id, product_name, new_price, effective_date')
-    .in('product_name', productNames)
-    .lte('effective_date', saleDate)
-    .order('effective_date', { ascending: true })
-    .order('id', { ascending: true });
-  if (phErr) throw phErr;
-  for (const row of priceRows || []) {
-    const productName = String(row.product_name || '').trim();
-    if (!productName) continue;
-    priceMap.set(productName, Number(row.new_price || 0));
-  }
+  const priceMap = await loadEffectivePriceMap(productNames, saleDate);
 
   const normalizedReadings = [];
   let grossSalesAmount = 0;
