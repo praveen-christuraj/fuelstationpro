@@ -36,6 +36,21 @@ export default function Dashboard() {
     finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const t = setInterval(async () => {
+      try {
+        const [ds, tk, p, c, u] = await Promise.all([
+          apiGet('/api/daily-sales'),
+          apiGet('/api/tanks'),
+          apiGet('/api/products'),
+          apiGet('/api/credit-sales'),
+          apiGet('/api/tanker-unloading/batches'),
+        ]);
+        setDailySales(ds || []); setTanks(tk || []); setProducts(p || []); setCredit(c || []); setUnloadBatches(u || []);
+      } catch (_) {}
+    }, 30000);
+    return () => clearInterval(t);
+  }, []);
 
   if (loading) return <Loading label="Loading dashboard…" />;
   if (error) return <ErrorState message={error} onRetry={load} />;

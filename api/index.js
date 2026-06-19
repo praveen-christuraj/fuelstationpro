@@ -300,6 +300,20 @@ export default async function handler(req, res) {
       }
       const { data, error } = await query.order(orderCol, orderDir);
       if (error) throw error;
+      if (dbTable === 'tanks') {
+        const reconciled = await Promise.all((data || []).map(async (tank) => {
+          const vol = await reconcileTankCurrentVolume(tank.name);
+          return { ...tank, current_volume: vol };
+        }));
+        return res.status(200).json(reconciled);
+      }
+      if (dbTable === 'buffer_tanks') {
+        const reconciled = await Promise.all((data || []).map(async (bt) => {
+          const vol = await reconcileBufferVolume(bt.product_name);
+          return { ...bt, volume: vol };
+        }));
+        return res.status(200).json(reconciled);
+      }
       return res.status(200).json(data);
     }
     if (req.method === 'POST') {
@@ -1003,6 +1017,72 @@ function sumByKey(rows, keyField, valueField) {
     map.set(key, (map.get(key) || 0) + Number(row?.[valueField] || 0));
   }
   return map;
+}
+
+async function reconcileTankCurrentVolume(tankName) {
+  const { data: latestDip } = await supabase
+    .from('dip_readings')
+    .select('volume_liters, reading_date')
+    .eq('tank_name', tankName)
+    .eq('reading_type', 'closing')
+    .order('reading_date', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const [{ data: unloads }, { data: readings }, { data: moves }] = await Promise.all([
+    supabase
+      .from('tanker_unloading_lines')
+      .select('received_volume, tanker_unloading_headers(unload_date)')
+      .eq('tank_name', tankName),
+    supabase
+      .from('daily_sales_nozzle_readings')
+      .select('volume, daily_sales_entries(sale_date)')
+      .eq('tank_name', tankName),
+    supabase
+      .from('stock_movements')
+      .select('volume, movement_type, movement_date')
+      .eq('tank_name', tankName),
+  ]);
+
+  const dipDate = latestDip?.reading_date;
+
+  const received = (unloads || [])
+    .filter((r) => !dipDate || r.tanker_unloading_headers?.unload_date > dipDate)
+    .reduce((s, r) => s + Number(r.received_volume || 0), 0);
+
+  const sold = (readings || [])
+    .filter((r) => !dipDate || r.daily_sales_entries?.sale_date > dipDate)
+    .reduce((s, r) => s + Number(r.volume || 0), 0);
+
+  const moveIn = (moves || [])
+    .filter((m) => m.movement_type === 'IN' && (!dipDate || m.movement_date > dipDate))
+    .reduce((s, m) => s + Number(m.volume || 0), 0);
+
+  const moveOut = (moves || [])
+    .filter((m) => m.movement_type === 'OUT' && (!dipDate || m.movement_date > dipDate))
+    .reduce((s, m) => s + Number(m.volume || 0), 0);
+
+  const base = latestDip ? Number(latestDip.volume_liters || 0) : 0;
+  return Math.max(0, base + received - sold + moveIn - moveOut);
+}
+
+async function reconcileBufferVolume(productName) {
+  const [{ data: testing }, { data: transfers }] = await Promise.all([
+    supabase
+      .from('daily_sales_testing')
+      .select('volume')
+      .eq('product_name', productName),
+    supabase
+      .from('stock_movements')
+      .select('volume')
+      .eq('product_name', productName)
+      .eq('reason', 'Testing Transfer')
+      .eq('movement_type', 'IN'),
+  ]);
+  const added = (testing || []).reduce((s, r) => s + Number(r.volume || 0), 0);
+  const removed = (transfers || []).reduce((s, m) => s + Number(m.volume || 0), 0);
+  return Math.max(0, added - removed);
 }
 
 async function createDailySalesEntry(payload, opts = {}) {
