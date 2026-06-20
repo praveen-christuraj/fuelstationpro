@@ -657,7 +657,9 @@ async function loadEffectivePriceMap(productNames, targetDate) {
     if (!Number.isFinite(resolvedPrice)) resolvedPrice = 0;
 
     for (const row of history) {
-      if (String(row.effective_date || '') > targetDate) break;
+      const rawDate = row.effective_date;
+      const effDate = rawDate instanceof Date ? rawDate.toISOString().slice(0, 10) : String(rawDate || '');
+      if (effDate > targetDate) break;
       resolvedPrice = Number(row.new_price || 0);
     }
 

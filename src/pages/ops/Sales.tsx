@@ -101,7 +101,9 @@ export default function Sales() {
       if (!Number.isFinite(resolvedPrice)) resolvedPrice = 0;
 
       history.forEach((row) => {
-        if (String(row.effective_date || '') <= targetDate) {
+        const rawDate = row.effective_date;
+        const effDate = rawDate instanceof Date ? rawDate.toISOString().slice(0, 10) : String(rawDate || '');
+        if (effDate <= targetDate) {
           resolvedPrice = Number(row.new_price || 0);
         }
       });
