@@ -42,6 +42,7 @@ const groups: NavGroup[] = [
     { to: '/bulk/inventory', label: 'Inventory Upload', icon: Upload },
     { to: '/bulk/credit-sales', label: 'Credit Sales Upload', icon: Upload },
     { to: '/bulk/tanker-unloading', label: 'Tanker Unloading Upload', icon: Upload },
+    { to: '/bulk/price-history', label: 'Price History Upload', icon: Upload },
   ]},
   { label: 'Documentation', icon: BookOpen, items: [
     { to: '/docs/project-plan', label: 'Project Plan', icon: FileText },

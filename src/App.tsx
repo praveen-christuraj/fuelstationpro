@@ -30,6 +30,7 @@ import DipReadingsUpload from './pages/bulk/DipReadingsUpload';
 import CalibrationUpload from './pages/bulk/CalibrationUpload';
 import CreditSalesUpload from './pages/bulk/CreditSalesUpload';
 import TankerUnloadingUpload from './pages/bulk/TankerUnloadingUpload';
+import PriceHistoryUpload from './pages/bulk/PriceHistoryUpload';
 import ProjectPlan from './pages/docs/ProjectPlan';
 import Backend from './pages/docs/Backend';
 import Android from './pages/docs/Android';
@@ -70,6 +71,7 @@ export default function App() {
           <Route path="/bulk/calibration" element={<P><CalibrationUpload /></P>} />
           <Route path="/bulk/credit-sales" element={<P><CreditSalesUpload /></P>} />
           <Route path="/bulk/tanker-unloading" element={<P><TankerUnloadingUpload /></P>} />
+          <Route path="/bulk/price-history" element={<P><PriceHistoryUpload /></P>} />
           <Route path="/docs/project-plan" element={<P><ProjectPlan /></P>} />
           <Route path="/docs/backend" element={<P><Backend /></P>} />
           <Route path="/docs/android" element={<P><Android /></P>} />

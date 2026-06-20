@@ -302,7 +302,7 @@ export default async function handler(req, res) {
       if (error) throw error;
       if (dbTable === 'tanks') {
         const reconciled = await Promise.all((data || []).map(async (tank) => {
-          const vol = await reconcileTankCurrentVolume(tank.name, tank.current_volume);
+          const vol = await reconcileTankCurrentVolume(tank.name);
           return { ...tank, current_volume: vol };
         }));
         return res.status(200).json(reconciled);
@@ -586,13 +586,7 @@ async function resolvePriceBeforeOrOnDate(productName, effectiveDate, excludeId 
   if (priceErr) throw priceErr;
   if (priceRow) return Number(priceRow.new_price || 0);
 
-  const { data: productRow, error: productErr } = await supabase
-    .from('products')
-    .select('current_price')
-    .eq('name', productName)
-    .maybeSingle();
-  if (productErr) throw productErr;
-  return Number(productRow?.current_price || 0);
+  return 0;
 }
 
 async function normalizePriceHistoryRow(row, excludeId = null) {
@@ -634,13 +628,6 @@ async function loadEffectivePriceMap(productNames, targetDate) {
   const priceMap = new Map();
   if (uniqueNames.length === 0) return priceMap;
 
-  const { data: productRows, error: productErr } = await supabase
-    .from('products')
-    .select('name, current_price')
-    .in('name', uniqueNames);
-  if (productErr) throw productErr;
-
-  const fallbackPriceByProduct = new Map((productRows || []).map((row) => [String(row.name || '').trim(), Number(row.current_price || 0)]));
   const { data: historyRows, error: historyErr } = await supabase
     .from('price_history')
     .select('id, product_name, old_price, new_price, effective_date')
@@ -660,15 +647,14 @@ async function loadEffectivePriceMap(productNames, targetDate) {
 
   for (const productName of uniqueNames) {
     const history = historyByProduct.get(productName) || [];
-    const fallbackPrice = Number(fallbackPriceByProduct.get(productName) || 0);
     if (history.length === 0) {
-      priceMap.set(productName, fallbackPrice);
+      priceMap.set(productName, 0);
       continue;
     }
 
     const firstRow = history[0];
-    let resolvedPrice = Number(firstRow.old_price ?? fallbackPrice);
-    if (!Number.isFinite(resolvedPrice)) resolvedPrice = fallbackPrice;
+    let resolvedPrice = Number(firstRow.old_price ?? 0);
+    if (!Number.isFinite(resolvedPrice)) resolvedPrice = 0;
 
     for (const row of history) {
       if (String(row.effective_date || '') > targetDate) break;
@@ -1019,7 +1005,7 @@ function sumByKey(rows, keyField, valueField) {
   return map;
 }
 
-async function reconcileTankCurrentVolume(tankName, storedVolume = 0) {
+async function reconcileTankCurrentVolume(tankName) {
   const { data: latestDip } = await supabase
     .from('dip_readings')
     .select('volume_liters, reading_date')
@@ -1064,10 +1050,6 @@ async function reconcileTankCurrentVolume(tankName, storedVolume = 0) {
     .reduce((s, m) => s + Number(m.volume || 0), 0);
 
   const base = latestDip ? Number(latestDip.volume_liters || 0) : 0;
-
-  if (!latestDip && received === 0 && sold === 0 && moveIn === 0 && moveOut === 0) {
-    return Number(storedVolume || 0);
-  }
 
   return Math.max(0, base + received - sold + moveIn - moveOut);
 }

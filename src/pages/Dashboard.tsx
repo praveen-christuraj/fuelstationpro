@@ -5,6 +5,7 @@ import { BarChart, LineChart, DonutChart } from '../components/Charts';
 import { Loading, ErrorState } from '../components/ui/States';
 import { Badge } from '../components/ui/Badge';
 import { apiGet, fmtMoney, fmtNum, fmtDate } from '../lib/api';
+import PriceUpdateModal from '../components/PriceUpdateModal';
 
 const COLORS = ['#2563eb', '#16a34a', '#f59e0b', '#8b5cf6', '#ec4899'];
 
@@ -35,6 +36,8 @@ export default function Dashboard() {
     } catch (e: any) { setError(e.message || 'Failed to load dashboard'); }
     finally { setLoading(false); }
   };
+  const [showPriceModal, setShowPriceModal] = useState(false);
+
   useEffect(() => { load(); }, []);
   useEffect(() => {
     const t = setInterval(async () => {
@@ -51,6 +54,14 @@ export default function Dashboard() {
     }, 30000);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => {
+    if (!loading && !error) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (localStorage.getItem('lastPriceUpdateDate') !== today) {
+        setShowPriceModal(true);
+      }
+    }
+  }, [loading, error]);
 
   if (loading) return <Loading label="Loading dashboard…" />;
   if (error) return <ErrorState message={error} onRetry={load} />;
@@ -217,6 +228,7 @@ export default function Dashboard() {
           </table>
         </div>
       </Card>
+      {showPriceModal && <PriceUpdateModal onClose={() => setShowPriceModal(false)} />}
     </div>
   );
 }
