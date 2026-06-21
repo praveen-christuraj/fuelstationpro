@@ -1842,7 +1842,6 @@ async function handleBufferTransfer(req, res) {
   const { data: buffer, error: bErr } = await supabase.from('buffer_tanks').select('id, volume').eq('product_name', productName).single();
   if (bErr) throw bErr;
   if (!buffer) return res.status(404).json({ error: 'Buffer not found for this product' });
-  if (Number(buffer.volume || 0) < volume) return res.status(400).json({ error: 'Insufficient buffer volume' });
 
   const { data: tankRow, error: tErr } = await supabase.from('tanks').select('id, current_volume, product_name').eq('name', tankName).single();
   if (tErr) throw tErr;
@@ -1850,13 +1849,11 @@ async function handleBufferTransfer(req, res) {
     return res.status(400).json({ error: 'Selected tank does not match the chosen product' });
   }
 
-  const nextBuffer = Number(buffer.volume || 0) - volume;
-  const { error: updBufErr } = await supabase.from('buffer_tanks').update({ volume: nextBuffer, updated_at: new Date().toISOString() }).eq('id', buffer.id);
-  if (updBufErr) throw updBufErr;
-
-  const nextTank = Number(tankRow.current_volume || 0) + volume;
-  const { error: updTankErr } = await supabase.from('tanks').update({ current_volume: nextTank }).eq('id', tankRow.id);
-  if (updTankErr) throw updTankErr;
+  const reconciledBuffer = await reconcileBufferVolume(productName);
+  if (reconciledBuffer < volume) {
+    await supabase.from('buffer_tanks').update({ volume: reconciledBuffer }).eq('id', buffer.id);
+    return res.status(400).json({ error: 'Insufficient buffer volume' });
+  }
 
   const { error: moveErr } = await supabase.from('stock_movements').insert([{
     movement_date: new Date().toISOString().slice(0, 10),
@@ -1867,6 +1864,14 @@ async function handleBufferTransfer(req, res) {
     reason: 'Testing Transfer',
   }]);
   if (moveErr) throw moveErr;
+
+  const nextBuffer = reconciledBuffer - volume;
+  const { error: updBufErr } = await supabase.from('buffer_tanks').update({ volume: nextBuffer, updated_at: new Date().toISOString() }).eq('id', buffer.id);
+  if (updBufErr) throw updBufErr;
+
+  const nextTank = Number(tankRow.current_volume || 0) + volume;
+  const { error: updTankErr } = await supabase.from('tanks').update({ current_volume: nextTank }).eq('id', tankRow.id);
+  if (updTankErr) throw updTankErr;
 
   return res.status(200).json({ ok: true, buffer_volume: nextBuffer, tank_volume: nextTank });
 }
