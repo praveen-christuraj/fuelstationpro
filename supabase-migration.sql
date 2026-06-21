@@ -204,6 +204,12 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   reason text,
   created_at timestamptz default now()
 );
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS movement_type text default 'IN';
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS tank_name text;
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS product_name text;
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS volume numeric(12,2) default 0;
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS reason text;
+ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS movement_date date;
 
 -- 14. sales
 CREATE TABLE IF NOT EXISTS sales (
