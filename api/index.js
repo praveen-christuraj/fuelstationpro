@@ -198,7 +198,7 @@ function parsePath(url) {
 
 function getFilters(url) {
   const params = new URL(url, 'http://localhost').searchParams;
-  const filters: Record<string, string> = {};
+  const filters = {};
   const pagination = {
     page: 1,
     pageSize: 20,
