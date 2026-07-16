@@ -1940,7 +1940,9 @@ async function deleteDailySalesEntry(entryId) {
     await adjustBufferVolumeByProduct(productName, -Number(volume || 0));
   });
   await Promise.all([...tankAdjustments, ...bufferAdjustments]);
-  await syncMetersForNozzles((existing.daily_sales_nozzle_readings || []).map((row) => row.nozzle_name));
+  try {
+    await syncMetersForNozzles((existing.daily_sales_nozzle_readings || []).map((row) => row.nozzle_name));
+  } catch (_) { /* best-effort meter sync — failure doesn't block deletion */ }
 
   const { error: delTestingErr } = await supabase.from('daily_sales_testing').delete().eq('sales_entry_id', entryId);
   if (delTestingErr) throw delTestingErr;
@@ -2599,6 +2601,9 @@ async function handleTankerUnloadingUndo(req, res) {
         .eq('header_id', header.id);
       if (lErr) throw lErr;
 
+      await supabase.from('tanker_unloading_lines').delete().eq('header_id', header.id);
+      await supabase.from('tanker_unloading_headers').delete().eq('id', header.id);
+
       for (const line of lines || []) {
         const { data: tankRow, error: tErr } = await supabase
           .from('tanks')
@@ -2611,8 +2616,6 @@ async function handleTankerUnloadingUndo(req, res) {
         if (uErr) throw uErr;
       }
 
-      await supabase.from('tanker_unloading_lines').delete().eq('header_id', header.id);
-      await supabase.from('tanker_unloading_headers').delete().eq('id', header.id);
       ok++;
       results.push({ entry_id: Number(id), status: 'deleted' });
     } catch (e) {

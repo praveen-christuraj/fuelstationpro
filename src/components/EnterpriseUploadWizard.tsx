@@ -34,7 +34,7 @@ interface UploadSession {
   fail: number;
   errors: { row: number; msg: string }[];
   entryIds: number[];
-  stage: 'idle' | 'uploading' | 'done' | 'rolling-back';
+  stage: 'idle' | 'uploading' | 'done' | 'rolling-back' | 'validate';
   fileName: string;
 }
 
@@ -86,17 +86,23 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
   const [result, setResult] = useState<{ ok: number; fail: number; duplicates: number; validationErrors: number; errors?: string[]; entryIds: number[] } | null>(null);
   const [fileName, setFileName] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [committing, setCommitting] = useState(false);
   const [undoing, setUndoing] = useState(false);
   const [undoResult, setUndoResult] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
 
   useEffect(() => {
     try {
       const saved = sessionStorage.getItem(SESSION_KEY);
       if (saved) {
         const s: UploadSession = JSON.parse(saved);
-        if (s.stage === 'uploading' || s.stage === 'done') {
+        if (s.stage === 'validate') {
+          setRefreshNotice(`Session was lost after page refresh. File "${s.fileName}" was parsed but data was cleared. Please re-upload.`);
+          sessionStorage.removeItem(SESSION_KEY);
+        } else if (s.stage === 'uploading' || s.stage === 'done') {
           setSession(s);
           if (s.stage === 'done') {
             setResult({ ok: s.ok, fail: s.fail, duplicates: 0, validationErrors: 0, errors: s.errors.length ? s.errors.map((e) => `Row ${e.row}: ${e.msg}`) : undefined, entryIds: s.entryIds });
@@ -252,6 +258,10 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
       setDuplicateErrors(duplicateErrors);
       setStage('validate');
 
+      try {
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify({ stage: 'validate', fileName: file.name, totalRows: rows.length }));
+      } catch {}
+
       const sessionId = `imp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const validRows = rows.length - new Set([...validationErrors.map((e) => e.row), ...duplicateErrors.map((e) => e.row)]).size;
       const totalChunks = Math.ceil(validRows / CHUNK_SIZE);
@@ -292,7 +302,11 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
       try { json = JSON.parse(text); } catch { json = null; }
       if (!res.ok) {
         const msg = json?.error || json?.message || text.slice(0, 200) || `HTTP ${res.status}`;
-        throw new Error(msg);
+        const err: any = new Error(msg);
+        if (json?.results && Array.isArray(json.results)) err.results = json.results;
+        if (typeof json?.ok === 'number') err.serverOk = json.ok;
+        if (typeof json?.fail === 'number') err.serverFail = json.fail;
+        throw err;
       }
       return json;
     } catch (e: any) {
@@ -305,7 +319,9 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
   };
 
   const commit = async () => {
-    if (!session) return;
+    if (!session || committing) return;
+    setCommitting(true);
+    try {
 
     const validationErrorRows = new Set(validationErrors.map((e) => e.row));
     const duplicateErrorRows = new Set(duplicateErrors.map((e) => e.row));
@@ -329,6 +345,17 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
 
     const total = payload.length;
     const totalChunks = Math.ceil(total / CHUNK_SIZE);
+
+    payload.sort((a, b) => {
+      for (const key of Object.keys(a)) {
+        if (key === '_csvRow') continue;
+        const va = String(a[key] ?? '');
+        const vb = String(b[key] ?? '');
+        if (va < vb) return -1;
+        if (va > vb) return 1;
+      }
+      return 0;
+    });
 
     setStage('import');
     setProgressPct(0);
@@ -373,9 +400,19 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
           ok += chunk.length;
         }
       } catch (e: any) {
-        const msg = e?.message || e?.error || `Chunk ${chunkIdx} failed`;
-        fail += chunk.length;
-        for (const r of chunk) errors.push({ row: Number(r._csvRow), msg });
+        if (e.results && Array.isArray(e.results) && e.results.length > 0) {
+          if (typeof e.serverOk === 'number') ok += e.serverOk;
+          if (typeof e.serverFail === 'number') fail += e.serverFail;
+          for (const r of e.results) {
+            const csvRow = r._csvRow || 0;
+            if (r.error) errors.push({ row: Number(csvRow), msg: String(r.error) });
+            if (r.entry_id) entryIds.push(Number(r.entry_id));
+          }
+        } else {
+          const msg = e?.message || e?.error || `Chunk ${chunkIdx} failed`;
+          fail += chunk.length;
+          for (const r of chunk) errors.push({ row: Number(r._csvRow), msg });
+        }
       }
 
       persistSession({ ok, fail, errors, entryIds, processedChunks: chunkIdx });
@@ -395,11 +432,14 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
     setResult(finalResult);
     persistSession({ stage: 'done', ok, fail, errors });
     setStage('results');
+    } finally {
+      setCommitting(false);
+    }
   };
 
   const handleUndo = async () => {
     if (!result || !result.entryIds.length || !undoEndpoint) return;
-    if (!window.confirm(`Undo this import? This will delete ${result.entryIds.length} entries and reverse all side effects.`)) return;
+    if (!window.confirm(`Undo this import? This will delete ${result.entryIds.length} record(s) and reverse all side effects.`)) return;
 
     setUndoing(true);
     setUndoResult(null);
@@ -477,6 +517,11 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
       {/* Stage: Upload */}
       {stage === 'upload' && (
         <Card className="p-6">
+          {refreshNotice && (
+            <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-700">
+              <AlertTriangle className="w-4 h-4 inline mr-1.5 -mt-0.5" />{refreshNotice}
+            </div>
+          )}
           <div className="max-w-xl">
             <h3 className="font-semibold text-slate-800 mb-1">Upload your data</h3>
             <p className="text-sm text-slate-500 mb-4">Download the CSV template, fill it with your records, then upload.</p>
@@ -606,9 +651,9 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
               {allIssues.length} issues
             </div>
             <div className="flex gap-2">
-              <button onClick={clearSession} className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">Cancel</button>
-              <button onClick={commit} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700">
-                <BarChart3 className="w-4 h-4" /> Import {parsed.length - allIssues.length} Records
+              <button onClick={clearSession} disabled={committing} className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50">Cancel</button>
+              <button onClick={commit} disabled={committing} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
+                {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart3 className="w-4 h-4" />} {committing ? 'Starting...' : `Import ${parsed.length - allIssues.length} Records`}
               </button>
             </div>
           </div>
