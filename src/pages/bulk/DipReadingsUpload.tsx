@@ -1,8 +1,8 @@
-import BulkUploadWizard from '../../components/BulkUploadWizard';
+import EnterpriseUploadWizard from '../../components/EnterpriseUploadWizard';
 
 export default function DipReadingsUpload() {
   return (
-    <BulkUploadWizard
+    <EnterpriseUploadWizard
       title="Bulk Dip Readings Upload"
       description="Import dip readings in bulk. Volume will be computed from the tank calibration chart on the server."
       endpoint="/api/dip-readings"
@@ -16,4 +16,3 @@ export default function DipReadingsUpload() {
     />
   );
 }
-

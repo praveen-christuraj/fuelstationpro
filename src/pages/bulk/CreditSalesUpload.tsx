@@ -1,8 +1,8 @@
-import BulkUploadWizard from '../../components/BulkUploadWizard';
+import EnterpriseUploadWizard from '../../components/EnterpriseUploadWizard';
 
 export default function CreditSalesUpload() {
   return (
-    <BulkUploadWizard
+    <EnterpriseUploadWizard
       title="Bulk Credit Sales Upload"
       description="Import credit sales records in bulk from a validated CSV template"
       endpoint="/api/credit-sales"
@@ -19,4 +19,3 @@ export default function CreditSalesUpload() {
     />
   );
 }
-

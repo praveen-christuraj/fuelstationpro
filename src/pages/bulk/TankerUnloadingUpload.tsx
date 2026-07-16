@@ -1,11 +1,12 @@
-import BulkUploadWizard from '../../components/BulkUploadWizard';
+import EnterpriseUploadWizard from '../../components/EnterpriseUploadWizard';
 
 export default function TankerUnloadingUpload() {
   return (
-    <BulkUploadWizard
+    <EnterpriseUploadWizard
       title="Bulk Tanker Unloading Upload"
       description="Import tanker unloading records in bulk. Rows are grouped by (unload_date, tanker_number) — each row represents one compartment. Volume &amp; variance are computed from calibration charts on the server."
       endpoint="/api/tanker-unloading/import"
+      undoEndpoint="/api/tanker-unloading/undo"
       templateName="tanker_unloading"
       fields={[
         { key: 'unload_date', label: 'Unload Date', type: 'date', required: true, example: '2026-06-13' },

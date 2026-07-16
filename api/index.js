@@ -281,8 +281,14 @@ export default async function handler(req, res) {
     if (parts[0] === 'tanker-unloading' && parts[1] === 'import' && req.method === 'POST') {
       return await handleTankerUnloadingImport(req, res);
     }
+    if (parts[0] === 'tanker-unloading' && parts[1] === 'undo' && req.method === 'POST') {
+      return await handleTankerUnloadingUndo(req, res);
+    }
     if (parts[0] === 'daily-sales' && parts[1] === 'import' && req.method === 'POST') {
       return await handleDailySalesImport(req, res);
+    }
+    if (parts[0] === 'daily-sales' && parts[1] === 'undo' && req.method === 'POST') {
+      return await handleDailySalesUndo(req, res);
     }
     if (parts[0] === 'daily-sales' && req.method === 'GET') {
       return await handleDailySalesList(req, res);
@@ -313,6 +319,9 @@ export default async function handler(req, res) {
     }
     if (parts[0] === 'sales' && req.method === 'PUT') {
       return await handleSalesUpdate(req, res);
+    }
+    if (parts[0] === 'stock-movements' && parts[1] === 'undo' && req.method === 'POST') {
+      return await handleStockMovementUndo(req, res);
     }
     if (parts[0] === 'stock-movements' && req.method === 'POST') {
       return await handleStockMovementCreate(req, res);
@@ -610,29 +619,99 @@ async function handleStockMovementCreate(req, res) {
     }
     return res.status(201).json(data);
   }
-  let ok = 0, fail = 0;
-  const results = [];
+
+  // Pre-validate all rows before any writes
+  const normalizedRows = [];
+  const validationResults = [];
+  let hasErrors = false;
   for (const row of rows) {
     const csvRow = row._csvRow || 0;
     const cleanRow = { ...row };
     delete cleanRow._csvRow;
     try {
       const [normalized] = await normalizeStockMovementRows([cleanRow], supabase);
+      normalizedRows.push({ csvRow, normalized });
+    } catch (e) {
+      hasErrors = true;
+      validationResults.push({ _csvRow: csvRow, error: String(e?.message || e) });
+    }
+  }
+
+  if (hasErrors) {
+    // Tag passing rows with a rejection message
+    const allResults = [];
+    let idx = 0;
+    for (const row of rows) {
+      const csvRow = row._csvRow || 0;
+      if (idx < normalizedRows.length && normalizedRows[idx].csvRow === csvRow) {
+        allResults.push({ _csvRow: csvRow, error: 'Some rows in this batch failed validation — no data was saved' });
+        idx++;
+      } else {
+        allResults.push(validationResults.shift());
+      }
+    }
+    return res.status(400).json({ ok: 0, fail: rows.length, results: allResults, message: 'Validation failed. No data was saved.' });
+  }
+
+  // All valid — write everything
+  let ok = 0, fail = 0;
+  const finalResults = [];
+  const createdMovements = [];
+  try {
+    for (const { csvRow, normalized } of normalizedRows) {
       const { data, error: insErr } = await supabase.from('stock_movements').insert(normalized).select();
-      if (insErr) { fail++; results.push({ _csvRow: csvRow, error: insErr.message }); continue; }
+      if (insErr) throw new Error(insErr.message);
       if (data?.[0]) {
         const signedVolume = String(data[0].movement_type || '').toUpperCase() === 'IN' ? Number(data[0].volume || 0) : -Number(data[0].volume || 0);
         await adjustTankCurrentVolumeForSalesDelta(data[0].tank_name, data[0].movement_date, signedVolume);
       }
+      createdMovements.push({ csvRow, data: data?.[0] || {} });
       ok++;
-      results.push({ _csvRow: csvRow, ...(data?.[0] || {}) });
+      finalResults.push({ _csvRow: csvRow, entry_id: (data?.[0] || {}).id, ...(data?.[0] || {}) });
+    }
+  } catch (writeErr) {
+    // Roll back all created movements
+    for (const m of createdMovements) {
+      try {
+        const signedVolume = String(m.data.movement_type || '').toUpperCase() === 'IN' ? -Number(m.data.volume || 0) : Number(m.data.volume || 0);
+        await adjustTankCurrentVolumeForSalesDelta(m.data.tank_name, m.data.movement_date, signedVolume);
+        await supabase.from('stock_movements').delete().eq('id', m.data.id);
+      } catch (_) { /* best-effort */ }
+    }
+    finalResults.length = 0;
+    for (const { csvRow } of normalizedRows) {
+      finalResults.push({ _csvRow: csvRow, error: `Rolled back: ${writeErr.message}` });
+    }
+    return res.status(400).json({ ok: 0, fail: rows.length, results: finalResults, message: 'Write failed. All data for this chunk rolled back.' });
+  }
+
+  return res.status(201).json({ ok, fail, results: finalResults });
+}
+
+async function handleStockMovementUndo(req, res) {
+  const { entry_ids } = req.body || {};
+  const ids = Array.isArray(entry_ids) ? entry_ids : [];
+  if (ids.length === 0) return res.status(400).json({ error: 'entry_ids array is required' });
+  let ok = 0, fail = 0;
+  const results = [];
+  for (const id of ids) {
+    try {
+      const { data: existing, error: existErr } = await supabase.from('stock_movements').select('*').eq('id', Number(id)).single();
+      if (existErr) throw new Error(`Stock movement ${id} not found`);
+      const signedVolume = String(existing.movement_type || '').toUpperCase() === 'IN'
+        ? -Number(existing.volume || 0)
+        : Number(existing.volume || 0);
+      await adjustTankCurrentVolumeForSalesDelta(existing.tank_name, existing.movement_date, signedVolume);
+      const { error: delErr } = await supabase.from('stock_movements').delete().eq('id', existing.id);
+      if (delErr) throw delErr;
+      ok++;
+      results.push({ entry_id: Number(id), status: 'deleted' });
     } catch (e) {
       fail++;
-      results.push({ _csvRow: csvRow, error: String(e?.message || e) });
+      results.push({ entry_id: Number(id), error: String(e?.message || e) });
     }
   }
-  const status = ok === 0 && results.length > 0 ? 400 : 201;
-  return res.status(status).json({ ok, fail, results });
+  return res.status(ok === 0 ? 400 : 200).json({ ok, fail, results });
 }
 
 async function handleStockMovementUpdate(req, res) {
@@ -1565,6 +1644,26 @@ async function createDailySalesEntry(payload, opts = {}) {
     }
   }
 
+  // Capture pre-state for rollback before applying side effects
+  const preMeterState = normalizedReadings.map((r) => {
+    const meter = meterMap.get(r.nozzle_name);
+    return { meterId: meter.id, previousReading: Number(meter.current_reading || 0) };
+  });
+  const preTankState = [];
+  for (const r of normalizedReadings) {
+    if (r.tank_name) {
+      const { data: tr, error: te } = await supabase.from('tanks').select('id, current_volume').eq('name', r.tank_name).single();
+      if (te) throw te;
+      preTankState.push({ tankId: tr.id, previousVolume: Number(tr.current_volume || 0) });
+    }
+  }
+  const preBufferState = [];
+  for (const t of normalizedTesting) {
+    const { data: br, error: be } = await supabase.from('buffer_tanks').select('id, volume').eq('product_name', t.product_name).maybeSingle();
+    if (be) throw be;
+    preBufferState.push({ productName: t.product_name, id: br?.id || null, previousVolume: Number(br?.volume || 0) });
+  }
+
   try {
     const meterUpdates = normalizedReadings.map(async (r) => {
       const meter = meterMap.get(r.nozzle_name);
@@ -1600,7 +1699,7 @@ async function createDailySalesEntry(payload, opts = {}) {
     throw new Error(`Meter/tank/buffer update failed, sales entry rolled back: ${updateErr.message}`);
   }
 
-  return entry.id;
+  return { entryId: entry.id, rollback: { preMeterState, preTankState, preBufferState } };
 }
 
 async function updateDailySalesEntry(entryId, payload) {
@@ -1834,13 +1933,6 @@ async function deleteDailySalesEntry(entryId) {
     }
   }
 
-  const { error: delTestingErr } = await supabase.from('daily_sales_testing').delete().eq('sales_entry_id', entryId);
-  if (delTestingErr) throw delTestingErr;
-  const { error: delReadErr } = await supabase.from('daily_sales_nozzle_readings').delete().eq('sales_entry_id', entryId);
-  if (delReadErr) throw delReadErr;
-  const { error: delEntryErr } = await supabase.from('daily_sales_entries').delete().eq('id', entryId);
-  if (delEntryErr) throw delEntryErr;
-
   const tankAdjustments = [...oldTankVolumes.entries()].map(async ([tankName, volume]) => {
     await adjustTankCurrentVolumeForSalesDelta(tankName, existing.sale_date, Number(volume || 0));
   });
@@ -1849,11 +1941,39 @@ async function deleteDailySalesEntry(entryId) {
   });
   await Promise.all([...tankAdjustments, ...bufferAdjustments]);
   await syncMetersForNozzles((existing.daily_sales_nozzle_readings || []).map((row) => row.nozzle_name));
+
+  const { error: delTestingErr } = await supabase.from('daily_sales_testing').delete().eq('sales_entry_id', entryId);
+  if (delTestingErr) throw delTestingErr;
+  const { error: delReadErr } = await supabase.from('daily_sales_nozzle_readings').delete().eq('sales_entry_id', entryId);
+  if (delReadErr) throw delReadErr;
+  const { error: delEntryErr } = await supabase.from('daily_sales_entries').delete().eq('id', entryId);
+  if (delEntryErr) throw delEntryErr;
+}
+
+async function handleDailySalesUndo(req, res) {
+  const { entry_ids } = req.body || {};
+  const ids = Array.isArray(entry_ids) ? entry_ids : [];
+  if (ids.length === 0) return res.status(400).json({ error: 'entry_ids array is required' });
+  let ok = 0, fail = 0;
+  const results = [];
+  for (const id of ids) {
+    try {
+      await deleteDailySalesEntry(Number(id));
+      ok++;
+      results.push({ entry_id: id, status: 'deleted' });
+    } catch (e) {
+      fail++;
+      results.push({ entry_id: id, error: String(e?.message || e) });
+    }
+  }
+  return res.status(ok === 0 ? 400 : 200).json({ ok, fail, results });
 }
 
 async function handleDailySalesImport(req, res) {
   const rows = Array.isArray(req.body) ? req.body : [];
   if (rows.length === 0) return res.status(400).json({ error: 'No rows provided' });
+
+  // Phase 1 — Group rows by (sale_date, shift, operator, dispenser)
   const groups = new Map();
   const groupCsvRows = new Map();
   for (const row of rows) {
@@ -1880,27 +2000,183 @@ async function handleDailySalesImport(req, res) {
     if (row.online_amount != null && row.online_amount !== '' && g.online_amount == null) g.online_amount = Number(row.online_amount) || 0;
     if (row.credit_amount != null && row.credit_amount !== '' && g.credit_amount == null) g.credit_amount = Number(row.credit_amount) || 0;
   }
-  let ok = 0;
-  let fail = 0;
-  const results = [];
-  for (const g of groups.values()) {
-    const csvRow = groupCsvRows.get(g.sale_date + '||' + g.shift_name + '||' + g.operator_name + '||' + g.dispenser_name) || 0;
-    try {
-      if (g.cash_amount == null) g.cash_amount = 0;
-      if (g.online_amount == null) g.online_amount = 0;
-      if (g.credit_amount == null) g.credit_amount = 0;
-      const entryId = await createDailySalesEntry(g, { skipCoverageCheck: true });
-      ok++;
-      results.push({ _csvRow: csvRow, entry_id: entryId, sale_date: g.sale_date, shift_name: g.shift_name, operator_name: g.operator_name, dispenser_name: g.dispenser_name });
-    } catch (e) {
-      fail++;
-      results.push({ _csvRow: csvRow, error: String(e?.message || e), sale_date: g.sale_date, shift_name: g.shift_name, operator_name: g.operator_name, dispenser_name: g.dispenser_name });
+
+  // Phase 2 — Batch-validate ALL groups before writing anything
+  const allDispensers = [...new Set([...groups.values()].map((g) => g.dispenser_name))];
+  const allOperators = [...new Set([...groups.values()].map((g) => g.operator_name))];
+  const allShifts = [...new Set([...groups.values()].map((g) => g.shift_name))];
+
+  const [dispRes, opRes, shiftRes] = await Promise.all([
+    allDispensers.length ? supabase.from('dispensers').select('name, status').in('name', allDispensers) : { data: [], error: null },
+    allOperators.length ? supabase.from('operators').select('name, active').in('name', allOperators) : { data: [], error: null },
+    allShifts.length ? supabase.from('shifts').select('name').in('name', allShifts) : { data: [], error: null },
+  ]);
+  if (dispRes.error) throw dispRes.error;
+  if (opRes.error) throw opRes.error;
+  if (shiftRes.error) throw shiftRes.error;
+
+  const dispenserMap = new Map((dispRes.data || []).map((d) => [d.name, d]));
+  const operatorMap = new Map((opRes.data || []).map((o) => [o.name, o]));
+  const shiftSet = new Set((shiftRes.data || []).map((s) => s.name));
+
+  // Check existing entries — one batch query
+  const allDates = [...new Set([...groups.values()].map((g) => g.sale_date))];
+  const allDispenserNames = [...new Set([...groups.values()].map((g) => g.dispenser_name))];
+  const { data: existingRaw, error: existErr } = await supabase
+    .from('daily_sales_entries')
+    .select('sale_date, shift_name, dispenser_name, operator_name')
+    .in('sale_date', allDates)
+    .in('dispenser_name', allDispenserNames);
+  if (existErr) throw existErr;
+
+  // Batch-query nozzles and meters for all dispensers in this chunk
+  const { data: nozzleRows, error: nozErr } = await supabase
+    .from('nozzles')
+    .select('name, dispenser_name, product_name, status')
+    .in('dispenser_name', allDispenserNames);
+  if (nozErr) throw nozErr;
+
+  const allNozzleNames = [...new Set((nozzleRows || []).map((n) => n.name).filter(Boolean))];
+  const { data: meterRows, error: meterErr } = await supabase
+    .from('meters')
+    .select('id, nozzle_name, current_reading')
+    .in('nozzle_name', allNozzleNames);
+  if (meterErr) throw meterErr;
+
+  const metersByNozzle = new Map((meterRows || []).map((m) => [m.nozzle_name, m]));
+  const nozzlesByDispenser = new Map();
+  for (const n of nozzleRows || []) {
+    if (!nozzlesByDispenser.has(n.dispenser_name)) nozzlesByDispenser.set(n.dispenser_name, []);
+    nozzlesByDispenser.get(n.dispenser_name).push(n);
+  }
+  const activeNozzlesByDispenser = new Map();
+  for (const [disp, nozzles] of nozzlesByDispenser) {
+    activeNozzlesByDispenser.set(disp, nozzles.filter((n) => n.status === 'Active' || n.status == null));
+  }
+
+  const existingByDispenser = new Map();
+  const usedOperators = new Map();
+  for (const e of existingRaw || []) {
+    existingByDispenser.set(`${e.sale_date}||${e.shift_name}||${e.dispenser_name}`, e);
+    const oKey = `${e.sale_date}||${e.shift_name}||${e.operator_name}`;
+    if (!usedOperators.has(oKey)) usedOperators.set(oKey, e.dispenser_name);
+  }
+
+  // Per-group validation against batch-fetched data
+  let hasErrors = false;
+  const validationResults = [];
+  const intraDispenserKeys = new Map();  // track dispenser conflicts within this chunk
+  const intraOperatorKeys = new Map();   // track operator conflicts within this chunk
+  for (const [key, g] of groups) {
+    const csvRow = groupCsvRows.get(key) || 0;
+    const errs = [];
+    const disp = dispenserMap.get(g.dispenser_name);
+    if (!disp) errs.push(`Dispenser not found: ${g.dispenser_name}`);
+    else if (disp.status && !['Operational', 'Active'].includes(String(disp.status))) errs.push(`Dispenser is not available for sales entry: ${g.dispenser_name}`);
+
+    const op = operatorMap.get(g.operator_name);
+    if (!op) errs.push(`Operator not found: ${g.operator_name}`);
+    else if (op.active === false) errs.push(`Operator is inactive: ${g.operator_name}`);
+
+    if (!shiftSet.has(g.shift_name)) errs.push(`Shift not found: ${g.shift_name}`);
+
+    const dKey = `${g.sale_date}||${g.shift_name}||${g.dispenser_name}`;
+    if (existingByDispenser.has(dKey)) errs.push(`Sales entry already exists for ${g.sale_date}, ${g.shift_name}, dispenser ${g.dispenser_name}`);
+    if (intraDispenserKeys.has(dKey)) errs.push(`Duplicate dispenser group within this batch for ${g.sale_date}, ${g.shift_name}, dispenser ${g.dispenser_name}`);
+    intraDispenserKeys.set(dKey, true);
+
+    const oKey = `${g.sale_date}||${g.shift_name}||${g.operator_name}`;
+    if (usedOperators.has(oKey)) errs.push(`Operator ${g.operator_name} is already assigned to dispenser ${usedOperators.get(oKey)} for ${g.shift_name} on ${g.sale_date}`);
+    if (intraOperatorKeys.has(oKey)) errs.push(`Duplicate operator within this batch for ${g.shift_name} on ${g.sale_date}`);
+    intraOperatorKeys.set(oKey, g.dispenser_name);
+
+    const nozzleNames = g.nozzle_readings.map((r) => r.nozzle_name);
+    if (new Set(nozzleNames).size !== nozzleNames.length) errs.push('Each nozzle can be entered only once in a sales entry');
+
+    // Validate nozzle existence, status, and meter availability
+    if (errs.length === 0 && disp && op && shiftSet.has(g.shift_name)) {
+      const dispNozzles = activeNozzlesByDispenser.get(g.dispenser_name) || [];
+      const dispNozzleNames = dispNozzles.map((n) => n.name);
+      for (const nn of nozzleNames) {
+        if (!dispNozzleNames.includes(nn)) {
+          errs.push(`Nozzle "${nn}" is not an active nozzle of dispenser ${g.dispenser_name}`);
+        } else {
+          const meter = metersByNozzle.get(nn);
+          if (!meter) errs.push(`Meter not found for nozzle: ${nn}`);
+          else {
+            const reading = g.nozzle_readings.find((r) => r.nozzle_name === nn);
+            if (reading && Number(reading.closing_reading) < Number(meter.current_reading || 0)) {
+              errs.push(`Closing reading for ${nn} (${reading.closing_reading}) must be >= current meter reading (${meter.current_reading})`);
+            }
+          }
+        }
+      }
+    }
+
+    if (errs.length > 0) {
+      hasErrors = true;
+      validationResults.push({ _csvRow: csvRow, error: errs.join('; '), sale_date: g.sale_date, shift_name: g.shift_name, operator_name: g.operator_name, dispenser_name: g.dispenser_name });
+    } else {
+      validationResults.push({ key, g, csvRow });
     }
   }
-  if (ok === 0 && groups.size > 0) {
-    return res.status(400).json({ groups: groups.size, ok, fail, results, message: 'All groups failed. No data was saved.' });
+
+  if (hasErrors) {
+    const allResults = validationResults.map((r) => {
+      if (r.error) return { _csvRow: r._csvRow, error: r.error, sale_date: r.sale_date, shift_name: r.shift_name, operator_name: r.operator_name, dispenser_name: r.dispenser_name };
+      return { _csvRow: r.csvRow, error: 'Some groups in this batch failed validation — no data was saved', sale_date: r.g.sale_date, shift_name: r.g.shift_name, operator_name: r.g.operator_name, dispenser_name: r.g.dispenser_name };
+    });
+    return res.status(400).json({ groups: groups.size, ok: 0, fail: groups.size, results: allResults, message: 'Validation failed. No data was saved.' });
   }
-  return res.status(200).json({ groups: groups.size, ok, fail, results });
+
+  // Phase 3 — All validations passed; write ALL groups
+  let ok = 0;
+  let fail = 0;
+  const finalResults = [];
+  const committed = []; // { entryId, rollback: { preMeterState, preTankState, preBufferState } }
+
+  try {
+    for (const r of validationResults) {
+      if (r.g.cash_amount == null) r.g.cash_amount = 0;
+      if (r.g.online_amount == null) r.g.online_amount = 0;
+      if (r.g.credit_amount == null) r.g.credit_amount = 0;
+      const { entryId, rollback } = await createDailySalesEntry(r.g, { skipCoverageCheck: true });
+      committed.push({ entryId, rollback });
+      ok++;
+      finalResults.push({ _csvRow: r.csvRow, entry_id: entryId, sale_date: r.g.sale_date, shift_name: r.g.shift_name, operator_name: r.g.operator_name, dispenser_name: r.g.dispenser_name });
+    }
+  } catch (writeErr) {
+    // Roll back every entry — including meter/tank/buffer side effects
+    for (const c of committed) {
+      try {
+        await supabase.from('daily_sales_testing').delete().eq('sales_entry_id', c.entryId);
+        await supabase.from('daily_sales_nozzle_readings').delete().eq('sales_entry_id', c.entryId);
+        await supabase.from('daily_sales_entries').delete().eq('id', c.entryId);
+        for (const ms of c.rollback.preMeterState) {
+          await supabase.from('meters').update({ current_reading: ms.previousReading }).eq('id', ms.meterId);
+        }
+        for (const ts of c.rollback.preTankState) {
+          await supabase.from('tanks').update({ current_volume: ts.previousVolume }).eq('id', ts.tankId);
+        }
+        for (const bs of c.rollback.preBufferState) {
+          if (bs.id) {
+            await supabase.from('buffer_tanks').update({ volume: bs.previousVolume }).eq('id', bs.id);
+          } else {
+            await supabase.from('buffer_tanks').delete().eq('product_name', bs.productName);
+          }
+        }
+      } catch (_) { /* best-effort cleanup */ }
+    }
+    const rollbackMsg = `Rolled back: ${writeErr.message}`;
+    for (const r of validationResults) {
+      finalResults.push({ _csvRow: r.csvRow, error: rollbackMsg, sale_date: r.g.sale_date, shift_name: r.g.shift_name, operator_name: r.g.operator_name, dispenser_name: r.g.dispenser_name });
+    }
+    ok = 0;
+    fail = validationResults.length;
+    return res.status(400).json({ groups: groups.size, ok, fail, results: finalResults, message: 'Write failed. All data for this chunk rolled back.' });
+  }
+
+  return res.status(200).json({ groups: groups.size, ok, fail, results: finalResults });
 }
 
 async function handleDipReadingCreate(req, res) {
@@ -2189,7 +2465,6 @@ async function handleTankerUnloadingImport(req, res) {
   if (rows.length === 0) return res.status(400).json({ error: 'No rows provided' });
 
   const groups = new Map();
-  const rowCsvMap = new Map();
   for (const row of rows) {
     const unloadDate = requireText(row.unload_date, 'Unload date');
     const tankerNumber = requireText(row.tanker_number, 'Tanker number');
@@ -2224,14 +2499,34 @@ async function handleTankerUnloadingImport(req, res) {
     });
   }
 
-  let ok = 0;
-  let fail = 0;
-  const results = [];
-
+  // Pre-validate all groups before writing
+  const validated = [];
+  let hasErrors = false;
   for (const g of groups.values()) {
+    const csvRow = g._csvRows[0] || 0;
     try {
       const normalizedLines = await normalizeTankerUnloadingCompartments(g.compartments);
+      validated.push({ g, csvRow, normalizedLines });
+    } catch (e) {
+      hasErrors = true;
+      validated.push({ g, csvRow, error: String(e?.message || e) });
+    }
+  }
 
+  if (hasErrors) {
+    const allResults = validated.map((v) => {
+      if (v.error) return { _csvRow: v.csvRow, tanker_number: v.g.tanker_number, unload_date: v.g.unload_date, error: v.error };
+      return { _csvRow: v.csvRow, tanker_number: v.g.tanker_number, unload_date: v.g.unload_date, error: 'Some groups in this batch failed validation — no data was saved' };
+    });
+    return res.status(400).json({ groups: groups.size, ok: 0, fail: groups.size, results: allResults, message: 'Validation failed. No data was saved.' });
+  }
+
+  // All pass — write everything
+  let ok = 0, fail = 0;
+  const finalResults = [];
+  const createdHeaders = [];
+  try {
+    for (const { g, csvRow, normalizedLines } of validated) {
       const { data: header, error: headerErr } = await supabase
         .from('tanker_unloading_headers')
         .insert([{
@@ -2246,7 +2541,6 @@ async function handleTankerUnloadingImport(req, res) {
         .single();
       if (headerErr) throw headerErr;
 
-      let headerCreated = true;
       const linesToInsert = normalizedLines.map((l) => ({ header_id: header.id, ...l }));
       const { error: linesErr } = await supabase.from('tanker_unloading_lines').insert(linesToInsert);
       if (linesErr) {
@@ -2254,31 +2548,77 @@ async function handleTankerUnloadingImport(req, res) {
         throw linesErr;
       }
 
-      try {
-        const tankUpdates = [];
-        for (const line of normalizedLines) {
-          const { data: tankRow, error: tErr } = await supabase.from('tanks').select('id, current_volume').eq('name', line.tank_name).single();
-          if (tErr) throw tErr;
-          const nextVol = Number(tankRow.current_volume || 0) + Number(line.received_volume || 0);
-          tankUpdates.push(supabase.from('tanks').update({ current_volume: nextVol }).eq('id', tankRow.id));
-        }
-        await Promise.all(tankUpdates);
-      } catch (volErr) {
-        await supabase.from('tanker_unloading_lines').delete().eq('header_id', header.id);
-        await supabase.from('tanker_unloading_headers').delete().eq('id', header.id);
-        throw new Error(`Tank volume update failed, entry rolled back: ${volErr.message}`);
+      const tankUpdates = [];
+      for (const line of normalizedLines) {
+        const { data: tankRow, error: tErr } = await supabase.from('tanks').select('id, current_volume').eq('name', line.tank_name).single();
+        if (tErr) throw tErr;
+        const nextVol = Number(tankRow.current_volume || 0) + Number(line.received_volume || 0);
+        tankUpdates.push(supabase.from('tanks').update({ current_volume: nextVol }).eq('id', tankRow.id));
       }
+      await Promise.all(tankUpdates);
 
+      createdHeaders.push({ headerId: header.id, csvRow, tankerNumber: g.tanker_number, unloadDate: g.unload_date });
       ok++;
-      const csvRow = g._csvRows[0] || 0;
-      results.push({ _csvRow: csvRow, tanker_number: g.tanker_number, unload_date: g.unload_date, compartments: normalizedLines.length });
-    } catch (e) {
-      fail++;
-      const csvRow = g._csvRows[0] || 0;
-      results.push({ _csvRow: csvRow, tanker_number: g.tanker_number, unload_date: g.unload_date, error: String(e?.message || e) });
+      finalResults.push({ _csvRow: csvRow, entry_id: header.id, tanker_number: g.tanker_number, unload_date: g.unload_date, compartments: normalizedLines.length });
     }
+  } catch (writeErr) {
+    for (const h of createdHeaders) {
+      try {
+        await supabase.from('tanker_unloading_lines').delete().eq('header_id', h.headerId);
+        await supabase.from('tanker_unloading_headers').delete().eq('id', h.headerId);
+      } catch (_) { /* best-effort */ }
+    }
+    finalResults.length = 0;
+    for (const v of validated) {
+      finalResults.push({ _csvRow: v.csvRow, tanker_number: v.g.tanker_number, unload_date: v.g.unload_date, error: `Rolled back: ${writeErr.message}` });
+    }
+    return res.status(400).json({ groups: groups.size, ok: 0, fail: groups.size, results: finalResults, message: 'Write failed. All data for this chunk rolled back.' });
   }
 
-  const tuStatus = ok === 0 && groups.size > 0 ? 400 : 200;
-  return res.status(tuStatus).json({ groups: groups.size, ok, fail, results });
+  return res.status(200).json({ groups: groups.size, ok, fail, results: finalResults });
+}
+
+async function handleTankerUnloadingUndo(req, res) {
+  const { entry_ids } = req.body || {};
+  const ids = Array.isArray(entry_ids) ? entry_ids : [];
+  if (ids.length === 0) return res.status(400).json({ error: 'entry_ids array is required' });
+  let ok = 0, fail = 0;
+  const results = [];
+  for (const id of ids) {
+    try {
+      const { data: header, error: hErr } = await supabase
+        .from('tanker_unloading_headers')
+        .select('id, unload_date')
+        .eq('id', Number(id))
+        .single();
+      if (hErr) throw new Error(`Tanker unloading header ${id} not found`);
+
+      const { data: lines, error: lErr } = await supabase
+        .from('tanker_unloading_lines')
+        .select('id, tank_name, received_volume')
+        .eq('header_id', header.id);
+      if (lErr) throw lErr;
+
+      for (const line of lines || []) {
+        const { data: tankRow, error: tErr } = await supabase
+          .from('tanks')
+          .select('id, current_volume')
+          .eq('name', line.tank_name)
+          .single();
+        if (tErr) throw tErr;
+        const prevVol = Math.max(0, Number(tankRow.current_volume || 0) - Number(line.received_volume || 0));
+        const { error: uErr } = await supabase.from('tanks').update({ current_volume: prevVol }).eq('id', tankRow.id);
+        if (uErr) throw uErr;
+      }
+
+      await supabase.from('tanker_unloading_lines').delete().eq('header_id', header.id);
+      await supabase.from('tanker_unloading_headers').delete().eq('id', header.id);
+      ok++;
+      results.push({ entry_id: Number(id), status: 'deleted' });
+    } catch (e) {
+      fail++;
+      results.push({ entry_id: Number(id), error: String(e?.message || e) });
+    }
+  }
+  return res.status(ok === 0 ? 400 : 200).json({ ok, fail, results });
 }

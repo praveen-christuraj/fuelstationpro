@@ -1,8 +1,8 @@
-import BulkUploadWizard from '../../components/BulkUploadWizard';
+import EnterpriseUploadWizard from '../../components/EnterpriseUploadWizard';
 
 export default function PriceHistoryUpload() {
   return (
-    <BulkUploadWizard
+    <EnterpriseUploadWizard
       title="Bulk Price History Upload"
       description="Import historical price changes in bulk. Each row creates a price_history record that the system uses to compute correct sales amounts for back-dated entries."
       endpoint="/api/price-history"

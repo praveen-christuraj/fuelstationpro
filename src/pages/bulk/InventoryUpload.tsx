@@ -1,7 +1,7 @@
-import BulkUploadWizard from '../../components/BulkUploadWizard';
+import EnterpriseUploadWizard from '../../components/EnterpriseUploadWizard';
 
 export default function InventoryUpload() {
-  return <BulkUploadWizard title="Bulk Inventory Upload" description="Import stock movements (in/out) to adjust inventory levels" endpoint="/api/stock-movements" templateName="inventory" fields={[
+  return <EnterpriseUploadWizard title="Bulk Inventory Upload" description="Import stock movements (in/out) to adjust inventory levels" endpoint="/api/stock-movements" undoEndpoint="/api/stock-movements/undo" templateName="inventory" fields={[
     { key: 'movement_date', label: 'Date', type: 'date', required: true, example: '2024-06-01' },
     { key: 'movement_type', label: 'Type (IN/OUT)', required: true, example: 'IN', options: ['IN', 'OUT'] },
     { key: 'tank_name', label: 'Tank', required: true, example: 'Tank T1' },

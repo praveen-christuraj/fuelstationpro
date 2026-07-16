@@ -1,4 +1,4 @@
-import BulkUploadWizard from '../../components/BulkUploadWizard';
+import EnterpriseUploadWizard from '../../components/EnterpriseUploadWizard';
 
 function validateTankRow(row: Record<string, string>, rowNumber: number): string[] {
   const errors: string[] = [];
@@ -29,7 +29,7 @@ function validateTankRow(row: Record<string, string>, rowNumber: number): string
 }
 
 export default function TankDataUpload() {
-  return <BulkUploadWizard title="Bulk Tank Data Upload" description="Import tank master records & opening stock in bulk" endpoint="/api/tanks" templateName="tank_data" fields={[
+  return <EnterpriseUploadWizard title="Bulk Tank Data Upload" description="Import tank master records & opening stock in bulk" endpoint="/api/tanks" templateName="tank_data" fields={[
     { key: 'name', label: 'Tank Name', required: true, unique: true, example: 'Tank T1' },
     { key: 'code', label: 'Code', unique: true, example: 'T1' },
     { key: 'product_name', label: 'Product', required: true, example: 'Petrol (MS)' },

@@ -1,8 +1,8 @@
-import BulkUploadWizard from '../../components/BulkUploadWizard';
+import EnterpriseUploadWizard from '../../components/EnterpriseUploadWizard';
 
 export default function CalibrationUpload() {
   return (
-    <BulkUploadWizard
+    <EnterpriseUploadWizard
       title="Bulk Tank Calibration Upload"
       description="Import calibration points in bulk. Points are grouped by tank_name, validated, then replaced for each tank."
       endpoint="/api/calibration/import"
@@ -15,4 +15,3 @@ export default function CalibrationUpload() {
     />
   );
 }
-

@@ -1,11 +1,12 @@
-import BulkUploadWizard from '../../components/BulkUploadWizard';
+import EnterpriseUploadWizard from '../../components/EnterpriseUploadWizard';
 
 export default function DailySalesUpload() {
   return (
-    <BulkUploadWizard
+    <EnterpriseUploadWizard
       title="Bulk Daily Sales Upload"
       description="Import grouped daily sales with dispenser-wise reconciliation. Rows are grouped by (sale_date, shift_name, operator_name, dispenser_name), and each row should represent one nozzle of the selected dispenser."
       endpoint="/api/daily-sales/import"
+      undoEndpoint="/api/daily-sales/undo"
       templateName="daily_sales"
       fields={[
         { key: 'sale_date', label: 'Sale Date', type: 'date', required: true, example: '2026-06-01' },
