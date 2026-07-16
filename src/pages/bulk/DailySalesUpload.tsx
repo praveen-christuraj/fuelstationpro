@@ -21,8 +21,8 @@ export default function DailySalesUpload() {
       undoEndpoint="/api/daily-sales/undo"
       templateName="daily_sales"
       customValidate={validateDailySalesRow}
-      chunkSize={40}
-      requestTimeoutMs={240000}
+      chunkSize={20}
+      requestTimeoutMs={60000}
       sortBeforeUpload={false}
       fields={[
         { key: 'sale_date', label: 'Sale Date', type: 'date', required: true, example: '2026-06-01' },
@@ -30,6 +30,7 @@ export default function DailySalesUpload() {
         { key: 'operator_name', label: 'Operator', required: true, example: 'Ramesh Kumar' },
         { key: 'dispenser_name', label: 'Dispenser', required: true, example: 'Dispenser 1' },
         { key: 'nozzle_name', label: 'Nozzle', required: true, example: 'Nozzle 1A' },
+        { key: 'opening_reading', label: 'Opening Reading', type: 'number', example: '121000' },
         { key: 'closing_reading', label: 'Closing Reading', type: 'number', required: true, min: 0, example: '121350' },
         { key: 'testing_volume', label: 'Testing Volume', type: 'number', example: '5' },
         { key: 'testing_remarks', label: 'Testing Remarks', example: 'Density test' },

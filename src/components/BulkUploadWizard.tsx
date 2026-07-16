@@ -224,6 +224,24 @@ export default function BulkUploadWizard({ title, description, endpoint, fields,
     }
 
     const total = payload.length;
+
+    const hasOpeningReading = fields.some((f) => f.key === 'opening_reading');
+    const hasClosingReading = fields.some((f) => f.key === 'closing_reading');
+    const hasNozzleName = fields.some((f) => f.key === 'nozzle_name');
+    if (hasOpeningReading && hasClosingReading && hasNozzleName) {
+      const lastClosingByNozzle = new Map<string, number>();
+      for (const row of payload) {
+        const nozzle = String(row.nozzle_name ?? '');
+        if (!nozzle) continue;
+        if (row.closing_reading == null) continue;
+        const prevClosing = lastClosingByNozzle.get(nozzle);
+        if (prevClosing !== undefined && (row.opening_reading == null)) {
+          row.opening_reading = prevClosing;
+        }
+        lastClosingByNozzle.set(nozzle, Number(row.closing_reading));
+      }
+    }
+
     for (let i = 0; i < total; i += CHUNK_SIZE) {
       const chunk = payload.slice(i, i + CHUNK_SIZE);
       const chunkIdx = Math.floor(i / CHUNK_SIZE) + 1;

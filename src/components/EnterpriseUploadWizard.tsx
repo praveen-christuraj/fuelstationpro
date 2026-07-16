@@ -375,6 +375,23 @@ export default function EnterpriseUploadWizard({
       });
     }
 
+    const hasOpeningReading = fields.some((f) => f.key === 'opening_reading');
+    const hasClosingReading = fields.some((f) => f.key === 'closing_reading');
+    const hasNozzleName = fields.some((f) => f.key === 'nozzle_name');
+    if (hasOpeningReading && hasClosingReading && hasNozzleName) {
+      const lastClosingByNozzle = new Map<string, number>();
+      for (const row of payload) {
+        const nozzle = String(row.nozzle_name ?? '');
+        if (!nozzle) continue;
+        if (row.closing_reading == null) continue;
+        const prevClosing = lastClosingByNozzle.get(nozzle);
+        if (prevClosing !== undefined && (row.opening_reading == null)) {
+          row.opening_reading = prevClosing;
+        }
+        lastClosingByNozzle.set(nozzle, Number(row.closing_reading));
+      }
+    }
+
     setStage('import');
     setProgressPct(0);
     persistSession({ stage: 'uploading' });

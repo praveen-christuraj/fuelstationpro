@@ -68,9 +68,10 @@ const REFERENCE_MAP = {
 };
 
 async function beforeDeleteCheck(dbTable, id, supabase) {
-  const { data: record, error: fetchErr } = await supabase.from(dbTable).select('*').eq('id', id).single();
-  if (fetchErr) throw fetchErr;
-  if (!record) throw new Error('Record not found');
+  const record = await safeSingle(
+    supabase.from(dbTable).select('*').eq('id', id),
+    'Record not found'
+  );
 
   if (record.active === true || record.active === 1) {
     throw new Error('Cannot delete an active record. Set it to inactive first.');
@@ -409,6 +410,7 @@ export default async function handler(req, res) {
       return res.status(200).json(data);
     }
     if (req.method === 'POST') {
+      if (req.body == null) return res.status(400).json({ error: 'Request body is required' });
       const rows = Array.isArray(req.body) ? req.body : [req.body];
       const isBatch = rows.length > 1;
       if (isBatch) {
@@ -578,7 +580,15 @@ export default async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
     console.error('API error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    const message = err?.message || err?.error || 'Internal server error';
+    const status = err?.statusCode || 500;
+    const detail = err?.detail || null;
+    const hint = err?.hint || null;
+    res.status(status).json({
+      error: message,
+      ...(detail ? { detail } : {}),
+      ...(hint ? { hint } : {}),
+    });
   }
 }
 
@@ -586,8 +596,10 @@ async function handleCalibration(req, res, tankId) {
   const tid = Number(tankId);
   if (isNaN(tid)) return res.status(400).json({ error: 'Invalid tank ID' });
 
-  const { data: tank } = await supabase.from('tanks').select('id, capacity').eq('id', tid).single();
-  if (!tank) return res.status(404).json({ error: 'Tank not found' });
+  const tank = await safeSingle(
+    supabase.from('tanks').select('id, capacity').eq('id', tid),
+    'Tank not found'
+  );
 
   if (req.method === 'GET') {
     const { data, error } = await supabase
@@ -774,8 +786,10 @@ async function handleStockMovementUndo(req, res) {
 async function handleStockMovementUpdate(req, res) {
   const { id, ...rest } = req.body || {};
   if (!id) return res.status(400).json({ error: 'ID is required' });
-  const { data: existing, error: existingErr } = await supabase.from('stock_movements').select('*').eq('id', id).single();
-  if (existingErr) throw existingErr;
+  const existing = await safeSingle(
+    supabase.from('stock_movements').select('*').eq('id', id),
+    'Stock movement not found'
+  );
   const [normalized] = await normalizeStockMovementRows([rest], supabase);
   const { data, error } = await supabase.from('stock_movements').update(normalized).eq('id', id).select().single();
   if (error) throw error;
@@ -933,6 +947,19 @@ async function handleTankerUnloadingBatches(req, res) {
   return res.status(200).json(batches);
 }
 
+function createError(statusCode, message) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  return err;
+}
+
+async function safeSingle(query, notFoundMessage) {
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  if (!data) throw createError(404, notFoundMessage || 'Record not found');
+  return data;
+}
+
 function requireText(value, label) {
   const v = String(value ?? '').trim();
   if (!v) throw new Error(`${label} is required`);
@@ -1075,9 +1102,10 @@ function interpolateVolume(points, dipMM) {
 }
 
 async function loadCalibrationPointsByTankName(tankName) {
-  const { data: tank, error: tankErr } = await supabase.from('tanks').select('id, name, product_name').eq('name', tankName).single();
-  if (tankErr) throw tankErr;
-  if (!tank) throw new Error(`Tank not found: ${tankName}`);
+  const tank = await safeSingle(
+    supabase.from('tanks').select('id, name, product_name').eq('name', tankName),
+    `Tank not found: ${tankName}`
+  );
   const { data: points, error } = await supabase.from('tank_calibration').select('dip_mm, volume_liters').eq('tank_id', tank.id).order('dip_mm', { ascending: true });
   if (error) throw error;
   return { tank, points: points || [] };
@@ -1384,8 +1412,10 @@ async function adjustTankCurrentVolumeForSalesDelta(tankName, saleDate, deltaVol
   const delta = Number(deltaVolume || 0);
   if (!tankName || Math.abs(delta) < 0.000001) return;
   if (await hasClosingDipOnOrAfter(tankName, saleDate)) return;
-  const { data: tankRow, error: tErr } = await supabase.from('tanks').select('id, current_volume').eq('name', tankName).single();
-  if (tErr) throw tErr;
+  const tankRow = await safeSingle(
+    supabase.from('tanks').select('id, current_volume').eq('name', tankName),
+    `Tank not found: ${tankName}`
+  );
   const nextVol = Number(tankRow.current_volume || 0) + delta;
   if (nextVol < -0.000001) {
     throw new Error(`Tank volume cannot go negative while correcting sales for tank ${tankName}`);
@@ -2048,7 +2078,10 @@ async function handleDailySalesImport(req, res) {
     const g = groups.get(key);
     const nozzleName = requireText(row.nozzle_name, 'Nozzle');
     const closing = requireNonNegativeNumber(row.closing_reading, 'Closing reading');
-    g.nozzle_readings.push({ nozzle_name: nozzleName, closing_reading: closing });
+    const openingOverride = (row.opening_reading != null && row.opening_reading !== '')
+      ? requireNonNegativeNumber(row.opening_reading, 'Opening reading')
+      : null;
+    g.nozzle_readings.push({ nozzle_name: nozzleName, closing_reading: closing, opening_reading: openingOverride });
     if (row.testing_volume != null && row.testing_volume !== '') {
       const tv = requireNonNegativeNumber(row.testing_volume, 'Testing volume');
       if (tv > 0) {
@@ -2128,6 +2161,7 @@ async function handleDailySalesImport(req, res) {
   const validationResults = [];
   const intraDispenserKeys = new Map();
   const intraOperatorKeys = new Map();
+  const meterReadingOverrides = new Map(); // nozzle_name -> closing from earlier group in this batch, for chaining
   
   for (const [key, g] of groups) {
     const csvRow = groupCsvRows.get(key) || 0;
@@ -2176,10 +2210,13 @@ async function handleDailySalesImport(req, res) {
           const meter = metersByNozzle.get(nn);
           if (!meter) errs.push(`Meter not found for nozzle: ${nn}`);
           else {
-            if (closing < Number(meter.current_reading || 0)) {
-              errs.push(`Closing reading for ${nn} (${closing}) must be >= current meter reading (${meter.current_reading})`);
+            const effectiveMeterReading = meterReadingOverrides.has(nn)
+              ? meterReadingOverrides.get(nn)
+              : Number(meter.current_reading || 0);
+            const opening = r.opening_reading != null ? Number(r.opening_reading) : effectiveMeterReading;
+            if (closing < opening) {
+              errs.push(`Closing reading for ${nn} (${closing}) must be >= opening reading (${opening})`);
             } else {
-              const opening = Number(meter.current_reading || 0);
               const volume = closing - opening;
               const unitPrice = Number(priceMap.get(nozzle.product_name) || 0);
               const amount = Math.round(volume * unitPrice * 100) / 100;
@@ -2221,6 +2258,11 @@ async function handleDailySalesImport(req, res) {
             remarks: t.remarks,
           });
         }
+      }
+
+      // Update meter reading overrides so next group in this batch chains correctly
+      for (const nr of normalizedReadings) {
+        meterReadingOverrides.set(nr.nozzle_name, Number(nr.closing_reading));
       }
     }
 
@@ -2275,10 +2317,12 @@ async function handleDailySalesImport(req, res) {
       // Capture pre-write state for rollback
       const preMeterState = r.normalizedReadings.map((nr) => {
         const meter = metersByNozzle.get(nr.nozzle_name);
+        if (!meter) throw new Error(`Meter data missing for nozzle: ${nr.nozzle_name} — refresh and retry`);
         return { meterId: meter.id, previousReading: Number(meter.current_reading) };
       });
       const preTankState = [...new Set(r.normalizedReadings.map((nr) => nr.tank_name).filter(Boolean))].map((tn) => {
         const tank = tanksByName.get(tn);
+        if (!tank) throw new Error(`Tank data missing: ${tn} — refresh and retry`);
         return { tankId: tank.id, previousVolume: Number(tank.current_volume) };
       });
       const preBufferState = [...new Set(r.normalizedTestings.map((nt) => nt.product_name).filter(Boolean))].map(async (pn) => {
@@ -2315,11 +2359,15 @@ async function handleDailySalesImport(req, res) {
       // Apply side effects
       for (const nr of r.normalizedReadings) {
         const meter = metersByNozzle.get(nr.nozzle_name);
+        if (!meter) throw new Error(`Meter data missing for nozzle: ${nr.nozzle_name} — refresh and retry`);
         await supabase.from('meters').update({ current_reading: nr.closing_reading }).eq('id', meter.id);
+        meter.current_reading = nr.closing_reading; // update in-memory so next group chains correctly
         if (nr.tank_name) {
           const tank = tanksByName.get(nr.tank_name);
+          if (!tank) throw new Error(`Tank data missing: ${nr.tank_name} — refresh and retry`);
           const nextVol = Math.max(0, Number(tank.current_volume) - Number(nr.volume));
           await supabase.from('tanks').update({ current_volume: nextVol }).eq('id', tank.id);
+          tank.current_volume = nextVol; // update in-memory so next group chains correctly
         }
       }
       for (const nt of r.normalizedTestings) {
@@ -2683,8 +2731,10 @@ async function handleCalibrationImport(req, res) {
   for (const [tankName, points] of byTank.entries()) {
     const csvRow = tankCsvRows.get(tankName) || 0;
     try {
-      const { data: tank, error: tErr } = await supabase.from('tanks').select('id, name, capacity').eq('name', tankName).single();
-      if (tErr) throw tErr;
+      const tank = await safeSingle(
+        supabase.from('tanks').select('id, name, capacity').eq('name', tankName),
+        `Tank not found for calibration: ${tankName}`
+      );
       validateChart(points, Number(tank.capacity));
       const { data: oldPoints, error: oldErr } = await supabase
         .from('tank_calibration')
@@ -2763,12 +2813,15 @@ async function handleBufferTransfer(req, res) {
   const tankName = requireText(body.tank_name, 'Tank');
   const volume = requireNonNegativeNumber(body.volume, 'Volume');
 
-  const { data: buffer, error: bErr } = await supabase.from('buffer_tanks').select('id, volume').eq('product_name', productName).single();
-  if (bErr) throw bErr;
-  if (!buffer) return res.status(404).json({ error: 'Buffer not found for this product' });
+  const buffer = await safeSingle(
+    supabase.from('buffer_tanks').select('id, volume').eq('product_name', productName),
+    'Buffer not found for this product'
+  );
 
-  const { data: tankRow, error: tErr } = await supabase.from('tanks').select('id, current_volume, product_name').eq('name', tankName).single();
-  if (tErr) throw tErr;
+  const tankRow = await safeSingle(
+    supabase.from('tanks').select('id, current_volume, product_name').eq('name', tankName),
+    'Tank not found'
+  );
   if (tankRow.product_name && tankRow.product_name !== productName) {
     return res.status(400).json({ error: 'Selected tank does not match the chosen product' });
   }
