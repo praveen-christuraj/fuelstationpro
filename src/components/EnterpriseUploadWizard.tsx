@@ -46,6 +46,9 @@ interface Props {
   templateName: string;
   undoEndpoint?: string;
   customValidate?: (row: Record<string, string>, rowNumber: number) => string[];
+  chunkSize?: number;
+  requestTimeoutMs?: number;
+  sortBeforeUpload?: boolean;
 }
 
 const CHUNK_SIZE = 250;
@@ -75,7 +78,18 @@ function toNonNegativeNum(v: any): number | null {
   return n >= 0 ? n : null;
 }
 
-export default function EnterpriseUploadWizard({ title, description, endpoint, fields, templateName, undoEndpoint, customValidate }: Props) {
+export default function EnterpriseUploadWizard({
+  title,
+  description,
+  endpoint,
+  fields,
+  templateName,
+  undoEndpoint,
+  customValidate,
+  chunkSize = CHUNK_SIZE,
+  requestTimeoutMs = 60000,
+  sortBeforeUpload = true,
+}: Props) {
   const [stage, setStage] = useState<'upload' | 'validate' | 'import' | 'results'>('upload');
   const [parsed, setParsed] = useState<Record<string, string>[]>([]);
   const [validationErrors, setValidationErrors] = useState<{ row: number; msg: string }[]>([]);
@@ -264,12 +278,12 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
 
       const sessionId = `imp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const validRows = rows.length - new Set([...validationErrors.map((e) => e.row), ...duplicateErrors.map((e) => e.row)]).size;
-      const totalChunks = Math.ceil(validRows / CHUNK_SIZE);
+      const totalChunks = Math.ceil(validRows / chunkSize);
       const newSession: UploadSession = {
         id: sessionId,
         startedAt: Date.now(),
         totalRows: validRows,
-        chunkSize: CHUNK_SIZE,
+        chunkSize,
         totalChunks,
         processedChunks: 0,
         ok: 0,
@@ -288,7 +302,7 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
   const safeApiPost = async (url: string, body: any): Promise<any> => {
     const controller = new AbortController();
     abortRef.current = controller;
-    const timeout = setTimeout(() => controller.abort(), 60000);
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -311,7 +325,9 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
       return json;
     } catch (e: any) {
       clearTimeout(timeout);
-      if (e.name === 'AbortError') throw new Error('Request timed out');
+      if (e.name === 'AbortError') {
+        throw new Error(`Request timed out after ${Math.round(requestTimeoutMs / 1000)} seconds`);
+      }
       throw e;
     } finally {
       abortRef.current = null;
@@ -344,18 +360,20 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
     }
 
     const total = payload.length;
-    const totalChunks = Math.ceil(total / CHUNK_SIZE);
+    const totalChunks = Math.ceil(total / chunkSize);
 
-    payload.sort((a, b) => {
-      for (const key of Object.keys(a)) {
-        if (key === '_csvRow') continue;
-        const va = String(a[key] ?? '');
-        const vb = String(b[key] ?? '');
-        if (va < vb) return -1;
-        if (va > vb) return 1;
-      }
-      return 0;
-    });
+    if (sortBeforeUpload) {
+      payload.sort((a, b) => {
+        for (const key of Object.keys(a)) {
+          if (key === '_csvRow') continue;
+          const va = String(a[key] ?? '');
+          const vb = String(b[key] ?? '');
+          if (va < vb) return -1;
+          if (va > vb) return 1;
+        }
+        return 0;
+      });
+    }
 
     setStage('import');
     setProgressPct(0);
@@ -366,9 +384,10 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
     const entryIds: number[] = [];
     const startedAt = Date.now();
 
-    for (let i = 0; i < total; i += CHUNK_SIZE) {
-      const chunk = payload.slice(i, i + CHUNK_SIZE);
-      const chunkIdx = Math.floor(i / CHUNK_SIZE) + 1;
+    let haltedByTimeout = false;
+    for (let i = 0; i < total; i += chunkSize) {
+      const chunk = payload.slice(i, i + chunkSize);
+      const chunkIdx = Math.floor(i / chunkSize) + 1;
       const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
       const pct = Math.round((i / total) * 100);
 
@@ -412,6 +431,22 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
           const msg = e?.message || e?.error || `Chunk ${chunkIdx} failed`;
           fail += chunk.length;
           for (const r of chunk) errors.push({ row: Number(r._csvRow), msg });
+          if (msg.includes('Request timed out')) {
+            haltedByTimeout = true;
+            const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+            setProgressText(`Stopped after chunk ${chunkIdx}/${totalChunks}. The server did not reply within ${Math.round(requestTimeoutMs / 1000)} seconds.`);
+            for (let j = i + chunkSize; j < total; j += chunkSize) {
+              const remainingChunk = payload.slice(j, j + chunkSize);
+              for (const r of remainingChunk) {
+                errors.push({
+                  row: Number(r._csvRow),
+                  msg: `Upload stopped after a timeout in an earlier chunk. No later chunks were sent.`,
+                });
+              }
+              fail += remainingChunk.length;
+            }
+            break;
+          }
         }
       }
 
@@ -419,7 +454,9 @@ export default function EnterpriseUploadWizard({ title, description, endpoint, f
     }
 
     setProgressPct(100);
-    setProgressText(`Completed in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+    if (!haltedByTimeout) {
+      setProgressText(`Completed in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+    }
 
     const validationErrorCount = validationErrorRows.size;
     const duplicateCount = duplicateErrorRows.size;

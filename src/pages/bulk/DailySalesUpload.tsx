@@ -21,6 +21,9 @@ export default function DailySalesUpload() {
       undoEndpoint="/api/daily-sales/undo"
       templateName="daily_sales"
       customValidate={validateDailySalesRow}
+      chunkSize={40}
+      requestTimeoutMs={240000}
+      sortBeforeUpload={false}
       fields={[
         { key: 'sale_date', label: 'Sale Date', type: 'date', required: true, example: '2026-06-01' },
         { key: 'shift_name', label: 'Shift', required: true, example: 'Morning' },
