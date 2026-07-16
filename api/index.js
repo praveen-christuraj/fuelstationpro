@@ -412,8 +412,11 @@ export default async function handler(req, res) {
       const rows = Array.isArray(req.body) ? req.body : [req.body];
       const isBatch = rows.length > 1;
       if (isBatch) {
-        const results = [];
-        let ok = 0, fail = 0;
+        // Phase 1: Pre-validate ALL rows first without writing anything
+        const preValidated = [];
+        const validationResults = [];
+        let hasValidationErrors = false;
+        
         for (const row of rows) {
           const csvRow = row._csvRow || 0;
           try {
@@ -428,8 +431,8 @@ export default async function handler(req, res) {
               }
             }
             if (rowErrors.length > 0) {
-              fail++;
-              results.push({ _csvRow: csvRow, error: rowErrors.join('; ') });
+              hasValidationErrors = true;
+              validationResults.push({ _csvRow: csvRow, error: rowErrors.join('; ') });
               continue;
             }
             const refs = CROSS_REFERENCE_TABLES[dbTable];
@@ -439,8 +442,8 @@ export default async function handler(req, res) {
                 const val = String(rowClean[ref.field] ?? '').trim();
                 if (!val) continue;
                 const { data: refData, error: refErr } = await supabase.from(ref.refTable).select(ref.refField).eq(ref.refField, val).limit(1).maybeSingle();
-                if (refErr) { refError = true; fail++; results.push({ _csvRow: csvRow, error: `Reference check failed: ${refErr.message}` }); break; }
-                if (!refData) { refError = true; fail++; results.push({ _csvRow: csvRow, error: `${ref.label} not found: ${val}` }); break; }
+                if (refErr) { refError = true; hasValidationErrors = true; validationResults.push({ _csvRow: csvRow, error: `Reference check failed: ${refErr.message}` }); break; }
+                if (!refData) { refError = true; hasValidationErrors = true; validationResults.push({ _csvRow: csvRow, error: `${ref.label} not found: ${val}` }); break; }
               }
               if (refError) continue;
             }
@@ -449,20 +452,74 @@ export default async function handler(req, res) {
               normalizedRow = await normalizePriceHistoryRow(rowClean);
             }
             await checkDuplicateFields(dbTable, normalizedRow, supabase);
-            const { data, error: insErr } = await supabase.from(dbTable).insert(normalizedRow).select().single();
-            if (insErr) { fail++; results.push({ _csvRow: csvRow, error: insErr.message }); continue; }
-            if (dbTable === 'price_history' && data) {
-              await syncProductCurrentPrice(data?.product_name);
-            }
-            ok++;
-            results.push({ _csvRow: csvRow, ...(data || {}) });
+            // All validations passed for this row
+            preValidated.push({ csvRow, normalizedRow });
+            validationResults.push({ _csvRow: csvRow, status: 'prevalidated' });
           } catch (e) {
-            fail++;
-            results.push({ _csvRow: csvRow, error: String(e?.message || e) });
+            hasValidationErrors = true;
+            validationResults.push({ _csvRow: csvRow, error: String(e?.message || e) });
           }
         }
-        const status = ok === 0 && results.length > 0 ? 400 : 201;
-        return res.status(status).json({ ok, fail, results });
+        
+        // If any row failed validation, return all errors without writing anything
+        if (hasValidationErrors) {
+          const allResults = [];
+          let idx = 0;
+          for (const row of rows) {
+            const csvRow = row._csvRow || 0;
+            if (idx < validationResults.length && validationResults[idx]._csvRow === csvRow) {
+              const res = validationResults[idx];
+              if (res.error) {
+                allResults.push(res);
+              } else {
+                allResults.push({ _csvRow: csvRow, error: 'Some rows in this batch failed validation — no data was saved' });
+              }
+              idx++;
+            }
+          }
+          return res.status(400).json({ ok: 0, fail: rows.length, results: allResults, message: 'Validation failed. No data was saved.' });
+        }
+
+        // Phase 2: All rows are valid — now insert them all, with rollback if needed
+        let ok = 0, fail = 0;
+        const finalResults = [];
+        const insertedRecords = []; // To track what we need to rollback on failure
+
+        try {
+          for (const { csvRow, normalizedRow } of preValidated) {
+            const { data, error: insErr } = await supabase.from(dbTable).insert(normalizedRow).select().single();
+            if (insErr) throw new Error(insErr.message);
+            insertedRecords.push({ id: data.id, productName: data?.product_name }); // For price history sync and rollback
+            ok++;
+            finalResults.push({ _csvRow: csvRow, ...(data || {}) });
+          }
+
+          // All inserts succeeded — now perform any side effects (like syncing prices)
+          for (const rec of insertedRecords) {
+            if (dbTable === 'price_history' && rec.productName) {
+              await syncProductCurrentPrice(rec.productName);
+            }
+          }
+        } catch (writeErr) {
+          // Rollback: delete all inserted records
+          for (const rec of insertedRecords) {
+            try {
+              await supabase.from(dbTable).delete().eq('id', rec.id);
+            } catch (_) { /* best-effort cleanup */ }
+          }
+          // Return error for all rows
+          const rollbackMsg = `Rolled back: ${writeErr.message}`;
+          for (const row of rows) {
+            finalResults.push({ _csvRow: row._csvRow || 0, error: rollbackMsg });
+          }
+          ok = 0;
+          fail = rows.length;
+          return res.status(400).json({ ok, fail, results: finalResults, message: 'Write failed. All data for this batch rolled back.' });
+        }
+
+        // All done successfully!
+        const status = ok === 0 && finalResults.length > 0 ? 400 : 201;
+        return res.status(status).json({ ok, fail, results: finalResults });
       } else {
         const singleRow = rows[0] || {};
         const csvRow = singleRow._csvRow || 0;
@@ -2183,24 +2240,128 @@ async function handleDailySalesImport(req, res) {
 
 async function handleDipReadingCreate(req, res) {
   const rows = Array.isArray(req.body) ? req.body : [req.body];
-  let ok = 0;
-  let fail = 0;
-  const results = [];
+  if (rows.length === 0) return res.status(400).json({ error: 'No rows provided' });
+
+  // Phase 1 — Pre-validate all rows first
+  const validated = [];
+  let hasErrors = false;
   for (const row of rows) {
     const csvRow = row._csvRow || 0;
     try {
       const cleanRow = { ...row };
       delete cleanRow._csvRow;
-      const data = await createDipReading(cleanRow);
-      ok++;
-      results.push({ _csvRow: csvRow, id: data.id });
+      // Pre-validate by checking the steps of createDipReading
+      const readingDate = requireText(cleanRow.reading_date, 'Reading date');
+      const tankName = requireText(cleanRow.tank_name, 'Tank');
+      const dipMM = requireNonNegativeNumber(cleanRow.dip_mm, 'Dip (mm)');
+      const readingType = requireText(cleanRow.reading_type, 'Reading type');
+      if (!['opening', 'closing', 'intermediate'].includes(readingType)) {
+        throw new Error(`Reading type must be one of: opening, closing, intermediate`);
+      }
+      const { tank, points } = await loadCalibrationPointsByTankName(tankName);
+      const vol = interpolateVolume(points, dipMM);
+      if (vol == null) throw new Error('No calibration data available for this tank');
+      // Check for existing entry
+      const { data: existing, error: existingErr } = await supabase
+        .from('dip_readings')
+        .select('id')
+        .eq('reading_date', readingDate)
+        .eq('tank_name', tank.name)
+        .eq('reading_type', readingType)
+        .maybeSingle();
+      if (existingErr) throw existingErr;
+      // Store for phase 2
+      validated.push({ csvRow, cleanRow, tank, vol, readingType, existingId: existing?.id });
     } catch (e) {
-      fail++;
-      results.push({ _csvRow: csvRow, error: String(e?.message || e) });
+      hasErrors = true;
+      validated.push({ csvRow, error: String(e?.message || e) });
     }
   }
+
+  if (hasErrors) {
+    const allResults = validated.map((v) => {
+      if (v.error) return { _csvRow: v.csvRow, error: v.error };
+      return { _csvRow: v.csvRow, error: 'Some rows in this batch failed validation — no data was saved' };
+    });
+    return res.status(400).json({ ok: 0, fail: rows.length, results: allResults, message: 'Validation failed. No data was saved.' });
+  }
+
+  // Phase 2 — Write all rows with rollback on failure
+  let ok = 0;
+  let fail = 0;
+  const finalResults = [];
+  const modified = []; // { id, oldData, tank, readingType } for rollback
+  try {
+    for (const v of validated) {
+      const { csvRow, cleanRow, tank, vol, readingType, existingId } = v;
+      let data;
+      if (existingId) {
+        // Save old data for rollback
+        const { data: oldData, error: oldErr } = await supabase.from('dip_readings').select('*').eq('id', existingId).single();
+        if (oldErr) throw oldErr;
+        modified.push({ id: existingId, oldData, tank, readingType, isNew: false });
+        // Update existing
+        const result = await supabase
+          .from('dip_readings')
+          .update({ dip_mm: cleanRow.dip_mm, volume_liters: vol })
+          .eq('id', existingId)
+          .select()
+          .single();
+        if (result.error) throw result.error;
+        data = result.data;
+      } else {
+        // Insert new
+        const result = await supabase
+          .from('dip_readings')
+          .insert([{ 
+            reading_date: cleanRow.reading_date, 
+            tank_name: tank.name, 
+            dip_mm: cleanRow.dip_mm, 
+            volume_liters: vol, 
+            reading_type: readingType 
+          }])
+          .select()
+          .single();
+        if (result.error) throw result.error;
+        data = result.data;
+        modified.push({ id: data.id, oldData: null, tank, readingType, isNew: true });
+      }
+      // Update tank current volume if closing
+      if (readingType === 'closing') {
+        const { error: updErr } = await supabase.from('tanks').update({ current_volume: vol }).eq('id', tank.id);
+        if (updErr) throw updErr;
+      }
+      ok++;
+      finalResults.push({ _csvRow: csvRow, id: data.id });
+    }
+  } catch (writeErr) {
+    // Rollback all changes
+    for (const m of modified) {
+      try {
+        if (m.isNew) {
+          // Delete new entry
+          await supabase.from('dip_readings').delete().eq('id', m.id);
+        } else {
+          // Restore old data
+          await supabase.from('dip_readings').update(m.oldData).eq('id', m.id);
+        }
+        // If it was a closing, restore tank volume (we don't track previous volume, so just sync to latest)
+        if (m.readingType === 'closing') {
+          await syncTankCurrentVolumeToLatestClosing(m.tank.name);
+        }
+      } catch (_) { /* best-effort */ }
+    }
+    finalResults.length = 0;
+    for (const v of validated) {
+      finalResults.push({ _csvRow: v.csvRow, error: `Rolled back: ${writeErr.message}` });
+    }
+    ok = 0;
+    fail = rows.length;
+    return res.status(400).json({ ok, fail, results: finalResults, message: 'Write failed. All data for this batch rolled back.' });
+  }
+
   const status = ok === 0 && rows.length > 0 ? 400 : 201;
-  return res.status(status).json({ ok, fail, results });
+  return res.status(status).json({ ok, fail, results: finalResults });
 }
 
 async function syncTankCurrentVolumeToLatestClosing(tankName) {
@@ -2380,9 +2541,9 @@ async function handleCalibrationImport(req, res) {
     byTank.get(tankName).push({ dip_mm: dipMM, volume_liters: volume });
   }
 
-  let ok = 0;
-  let fail = 0;
-  const results = [];
+  // Phase 1 — Pre-validate all tanks and fetch old points
+  const validated = [];
+  let hasErrors = false;
   for (const [tankName, points] of byTank.entries()) {
     const csvRow = tankCsvRows.get(tankName) || 0;
     try {
@@ -2394,29 +2555,70 @@ async function handleCalibrationImport(req, res) {
         .select('dip_mm, volume_liters')
         .eq('tank_id', tank.id);
       if (oldErr) throw oldErr;
-      const { error: delErr } = await supabase.from('tank_calibration').delete().eq('tank_id', tank.id);
-      if (delErr) throw delErr;
-      const toInsert = points.map((p, i) => ({ tank_id: tank.id, dip_mm: p.dip_mm, volume_liters: p.volume_liters }));
-      const { error: insErr } = await supabase.from('tank_calibration').insert(toInsert);
-      if (insErr) {
-        if (oldPoints && oldPoints.length > 0) {
-          const restoreResult = await supabase.from('tank_calibration').insert(oldPoints.map((p) => ({ tank_id: tank.id, dip_mm: p.dip_mm, volume_liters: p.volume_liters })));
-          if (restoreResult.error) {
-            throw new Error(`Calibration replace failed and restore also failed: ${insErr.message}; restore: ${restoreResult.error.message}`);
-          }
-        }
-        throw insErr;
-      }
-      ok++;
-      results.push({ _csvRow: csvRow, tank_name: tank.name, points: points.length });
+      validated.push({ tankName, points, csvRow, tank, oldPoints });
     } catch (e) {
-      fail++;
-      results.push({ _csvRow: csvRow, tank_name: tankName, error: String(e?.message || e) });
+      hasErrors = true;
+      validated.push({ tankName, csvRow, error: String(e?.message || e) });
     }
   }
 
+  if (hasErrors) {
+    const allResults = validated.map((v) => {
+      if (v.error) return { _csvRow: v.csvRow, tank_name: v.tankName, error: v.error };
+      return { _csvRow: v.csvRow, tank_name: v.tankName, error: 'Some tanks in this batch failed validation — no data was saved' };
+    });
+    return res.status(400).json({ tanks: byTank.size, ok: 0, fail: byTank.size, results: allResults, message: 'Validation failed. No data was saved.' });
+  }
+
+  // Phase 2 — Write all tanks with rollback on failure
+  let ok = 0;
+  let fail = 0;
+  const finalResults = [];
+  const modifiedTanks = []; // { tankId, oldPoints, newPoints, tankName }
+  try {
+    for (const v of validated) {
+      const { tank, points, oldPoints, csvRow, tankName } = v;
+      // Delete existing points
+      const { error: delErr } = await supabase.from('tank_calibration').delete().eq('tank_id', tank.id);
+      if (delErr) throw delErr;
+      // Insert new points
+      const toInsert = points.map((p) => ({ tank_id: tank.id, dip_mm: p.dip_mm, volume_liters: p.volume_liters }));
+      const { error: insErr } = await supabase.from('tank_calibration').insert(toInsert);
+      if (insErr) {
+        // Attempt to restore this tank first before rolling back all
+        if (oldPoints && oldPoints.length > 0) {
+          await supabase.from('tank_calibration').insert(oldPoints.map((p) => ({ tank_id: tank.id, dip_mm: p.dip_mm, volume_liters: p.volume_liters })));
+        }
+        throw insErr;
+      }
+      // Track for rollback
+      modifiedTanks.push({ tankId: tank.id, oldPoints });
+      ok++;
+      finalResults.push({ _csvRow: csvRow, tank_name: tankName, points: points.length });
+    }
+  } catch (writeErr) {
+    // Rollback all modified tanks
+    for (const mt of modifiedTanks) {
+      try {
+        await supabase.from('tank_calibration').delete().eq('tank_id', mt.tankId);
+        if (mt.oldPoints && mt.oldPoints.length > 0) {
+          await supabase.from('tank_calibration').insert(mt.oldPoints.map((p) => ({ tank_id: mt.tankId, dip_mm: p.dip_mm, volume_liters: p.volume_liters })));
+        }
+      } catch (_) { /* best-effort */ }
+    }
+    // Prepare error results
+    finalResults.length = 0;
+    for (const v of validated) {
+      finalResults.push({ _csvRow: v.csvRow, tank_name: v.tankName, error: `Rolled back: ${writeErr.message}` });
+    }
+    ok = 0;
+    fail = byTank.size;
+    const calStatus = 400;
+    return res.status(calStatus).json({ tanks: byTank.size, ok, fail, results: finalResults, message: 'Write failed. All data for this batch rolled back.' });
+  }
+
   const calStatus = ok === 0 && byTank.size > 0 ? 400 : 200;
-  return res.status(calStatus).json({ tanks: byTank.size, ok, fail, results });
+  return res.status(calStatus).json({ tanks: byTank.size, ok, fail, results: finalResults });
 }
 
 async function handleBufferTransfer(req, res) {
