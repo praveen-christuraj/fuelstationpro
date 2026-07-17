@@ -1,15 +1,19 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Droplet, Wallet, AlertTriangle, Fuel, ArrowUpRight, Boxes } from 'lucide-react';
 import { Card, CardHeader } from '../components/ui/Card';
 import { BarChart, LineChart, DonutChart } from '../components/Charts';
 import { Loading, ErrorState } from '../components/ui/States';
 import { Badge } from '../components/ui/Badge';
 import { apiGet, fmtMoney, fmtNum, fmtDate } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import PriceUpdateModal from '../components/PriceUpdateModal';
 
 const COLORS = ['#2563eb', '#16a34a', '#f59e0b', '#8b5cf6', '#ec4899'];
 
 export default function Dashboard() {
+  const nav = useNavigate();
+  const { role } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [dailySales, setDailySales] = useState<any[]>([]);
@@ -17,6 +21,11 @@ export default function Dashboard() {
   const [products, setProducts] = useState<any[]>([]);
   const [credit, setCredit] = useState<any[]>([]);
   const [unloadBatches, setUnloadBatches] = useState<any[]>([]);
+
+  // Redirect data_entry users away from dashboard to their first allowed page
+  useEffect(() => {
+    if (role === 'data_entry') nav.replace('/ops/sales');
+  }, [role, nav]);
 
   const load = async () => {
     setLoading(true); setError('');

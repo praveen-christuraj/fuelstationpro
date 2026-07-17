@@ -7,6 +7,8 @@ export default function DipReadingsUpload() {
       description="Import dip readings in bulk. Volume will be computed from the tank calibration chart on the server."
       endpoint="/api/dip-readings"
       templateName="dip_readings"
+      chunkSize={50}
+      requestTimeoutMs={60000}
       fields={[
         { key: 'reading_date', label: 'Reading Date', type: 'date', required: true, example: '2026-06-01' },
         { key: 'tank_name', label: 'Tank', required: true, example: 'Tank 1' },

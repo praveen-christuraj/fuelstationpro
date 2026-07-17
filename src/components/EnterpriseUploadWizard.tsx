@@ -4,6 +4,9 @@ import { Card } from './ui/Card';
 import { parseCSV, toCSV, downloadCSV } from '../lib/csv';
 import { getAuthHeaders } from '../lib/api';
 
+/** A row as parsed from CSV — all values are strings until commit-time conversion */
+type ParsedCSVRow = Record<string, string>;
+
 export interface FieldSpec {
   key: string;
   label: string;
@@ -45,16 +48,29 @@ interface Props {
   fields: FieldSpec[];
   templateName: string;
   undoEndpoint?: string;
-  customValidate?: (row: Record<string, string>, rowNumber: number) => string[];
+  customValidate?: (row: ParsedCSVRow, rowNumber: number) => string[];
   chunkSize?: number;
   requestTimeoutMs?: number;
   sortBeforeUpload?: boolean;
+  /** Maximum rows to show in the preview table (default: 100) */
+  maxPreviewRows?: number;
+  /** Maximum allowed file size in MB (default: 10) */
+  maxFileSizeMb?: number;
+  /** Optional endpoint to check rows against existing DB records before commit.
+   *  POST body: { fields: string[], rows: { _csvRow: number, [key: string]: string }[] }
+   *  Expected response: { existing: { _csvRow: number, field: string, value: string }[] } */
+  validateEndpoint?: string;
+  /** Use chunked file reading to keep UI responsive during parse (default: true) */
+  streamParse?: boolean;
+  /** CSV file encoding (passed to FileReader). Default: 'UTF-8' */
+  encoding?: string;
 }
 
 const CHUNK_SIZE = 250;
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_VISIBLE_ERRORS = 200;
 const SESSION_KEY = 'fuelflow_upload_session';
+/** Max retries for transient chunk upload failures */
+const MAX_CHUNK_RETRIES = 2;
 
 function trimVal(v: any): string {
   return String(v ?? '').trim();
@@ -78,6 +94,89 @@ function toNonNegativeNum(v: any): number | null {
   return n >= 0 ? n : null;
 }
 
+/** Read a File in chunks, yielding between chunks so the UI stays responsive.
+ *  Accumulates text using the given encoding, then parses the full result via parseCSV. */
+function streamParseCSV(
+  file: File,
+  encoding: string,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<ParsedCSVRow[]> {
+  return new Promise((resolve, reject) => {
+    const CHUNK = 512 * 1024; // 512 KB
+    const total = file.size;
+    let offset = 0;
+    let buffer = '';
+
+    const readChunk = () => {
+      const end = Math.min(offset + CHUNK, total);
+      const blob = file.slice(offset, end);
+      const reader = new FileReader();
+
+      reader.onload = () => {
+        buffer += reader.result as string;
+        offset = end;
+        onProgress?.(offset, total);
+
+        if (offset >= total) {
+          // Normalize line endings and strip BOM, then parse with existing parser
+          const cleaned = buffer.replace(/^\ufeff/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+          resolve(parseCSV(cleaned));
+        } else {
+          setTimeout(readChunk, 0); // Yield to browser event loop
+        }
+      };
+
+      reader.onerror = () => reject(new Error('Failed to read file chunk'));
+      reader.readAsText(blob, encoding);
+    };
+
+    readChunk();
+  });
+}
+
+/** Contact the optional validateEndpoint to check for existing records in the DB.
+ *  Returns duplicate-like errors for rows that already exist. */
+async function validateAgainstServer(
+  validateEndpoint: string | undefined,
+  rows: ParsedCSVRow[],
+  fields: FieldSpec[],
+  getAuthHeaders: () => Promise<Record<string, string>>,
+): Promise<{ row: number; msg: string }[]> {
+  if (!validateEndpoint) return [];
+
+  const uniqueFields = fields.filter((f) => f.unique);
+  if (uniqueFields.length === 0) return [];
+
+  const keys = rows.map((r, i) => {
+    const obj: Record<string, string> = {};
+    uniqueFields.forEach((f) => { obj[f.key] = r[f.key]; });
+    obj._csvRow = String(i + 2);
+    return obj;
+  });
+
+  try {
+    const res = await fetch(validateEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
+      body: JSON.stringify({
+        fields: uniqueFields.map((f) => f.key),
+        rows: keys,
+      }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (data.existing && Array.isArray(data.existing)) {
+      return data.existing.map((e: any) => ({
+        row: Number(e._csvRow),
+        msg: `Already exists in system: "${trimVal(e.value)}" for "${e.field}"`,
+      }));
+    }
+    return [];
+  } catch {
+    return []; // Silently skip if validate endpoint is unavailable
+  }
+}
+
 export default function EnterpriseUploadWizard({
   title,
   description,
@@ -89,9 +188,14 @@ export default function EnterpriseUploadWizard({
   chunkSize = CHUNK_SIZE,
   requestTimeoutMs = 60000,
   sortBeforeUpload = true,
+  maxPreviewRows = 100,
+  maxFileSizeMb = 10,
+  validateEndpoint,
+  streamParse = true,
+  encoding = 'UTF-8',
 }: Props) {
   const [stage, setStage] = useState<'upload' | 'validate' | 'import' | 'results'>('upload');
-  const [parsed, setParsed] = useState<Record<string, string>[]>([]);
+  const [parsed, setParsed] = useState<ParsedCSVRow[]>([]);
   const [validationErrors, setValidationErrors] = useState<{ row: number; msg: string }[]>([]);
   const [duplicateErrors, setDuplicateErrors] = useState<{ row: number; msg: string }[]>([]);
   const [session, setSession] = useState<UploadSession | null>(null);
@@ -114,14 +218,15 @@ export default function EnterpriseUploadWizard({
       if (saved) {
         const s: UploadSession = JSON.parse(saved);
         if (s.stage === 'validate') {
-          setRefreshNotice(`Session was lost after page refresh. File "${s.fileName}" was parsed but data was cleared. Please re-upload.`);
+          setRefreshNotice(`Session was lost after refresh. File "${s.fileName}" was parsed but the parsed data was cleared. Please re-upload.`);
           sessionStorage.removeItem(SESSION_KEY);
-        } else if (s.stage === 'uploading' || s.stage === 'done') {
+        } else if (s.stage === 'uploading') {
+          setRefreshNotice(`Previous upload was interrupted mid-import after ${s.processedChunks}/${s.totalChunks} chunks. Please re-upload the file to start fresh.`);
+          sessionStorage.removeItem(SESSION_KEY);
+        } else if (s.stage === 'done') {
           setSession(s);
-          if (s.stage === 'done') {
-            setResult({ ok: s.ok, fail: s.fail, duplicates: 0, validationErrors: 0, errors: s.errors.length ? s.errors.map((e) => `Row ${e.row}: ${e.msg}`) : undefined, entryIds: s.entryIds });
-            setStage('results');
-          }
+          setResult({ ok: s.ok, fail: s.fail, duplicates: 0, validationErrors: 0, errors: s.errors.length ? s.errors.map((e) => `Row ${e.row}: ${e.msg}`) : undefined, entryIds: s.entryIds });
+          setStage('results');
         }
       }
     } catch {}
@@ -137,6 +242,9 @@ export default function EnterpriseUploadWizard({
   }, []);
 
   const clearSession = useCallback(() => {
+    if (stage !== 'upload' && parsed.length > 0) {
+      if (!window.confirm('Discard current data and start over? All parsed records and results will be lost.')) return;
+    }
     try { sessionStorage.removeItem(SESSION_KEY); } catch {}
     setSession(null);
     setResult(null);
@@ -149,7 +257,7 @@ export default function EnterpriseUploadWizard({
     setFileName('');
     setUndoResult(null);
     setUndoing(false);
-  }, []);
+  }, [stage, parsed.length]);
 
   const downloadTemplate = () => {
     const headers = fields.map((f) => f.key);
@@ -192,111 +300,159 @@ export default function EnterpriseUploadWizard({
     e.target.value = '';
   };
 
-  const processFile = (file: File) => {
-    if (file.size > MAX_FILE_SIZE) {
-      alert(`File size (${(file.size / 1024 / 1024).toFixed(1)}MB) exceeds the ${MAX_FILE_SIZE / 1024 / 1024}MB limit. Please split the file and try again.`);
+  /** Parse CSV, validate locally, then check against server if validateEndpoint is set */
+  const processFile = async (file: File) => {
+    const maxBytes = maxFileSizeMb * 1024 * 1024;
+    if (file.size > maxBytes) {
+      alert(`File size (${(file.size / 1024 / 1024).toFixed(1)}MB) exceeds the ${maxFileSizeMb}MB limit. Please split the file and try again.`);
       return;
     }
     setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result || '');
-      const rows = parseCSV(text);
-      const validationErrors: { row: number; msg: string }[] = [];
-      const duplicateErrors: { row: number; msg: string }[] = [];
-      const seenValues = new Map<string, Map<string, number>>();
-      fields.filter((f) => f.unique).forEach((f) => seenValues.set(f.key, new Map<string, number>()));
 
-      rows.forEach((row, rowIndex) => {
-        const rowNumber = rowIndex + 2;
-        let isValid = true;
+    // --- Step 1: Parse (streaming with progress, or one-shot) ---
+    setProgressText(streamParse ? 'Reading file...' : 'Parsing file...');
+    let rows: ParsedCSVRow[];
+    try {
+      if (streamParse) {
+        rows = await streamParseCSV(file, encoding, (loaded, total) => {
+          const pct = Math.round((loaded / total) * 100);
+          setProgressText(`Reading file... ${pct}% (${(loaded / 1024 / 1024).toFixed(1)}MB)`);
+        });
+      } else {
+        const text = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result || ''));
+          r.onerror = () => reject(new Error('Failed to read file'));
+          r.readAsText(file, encoding);
+        });
+        const cleaned = text.replace(/^\ufeff/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        rows = parseCSV(cleaned);
+      }
+    } catch {
+      alert('Failed to read the file. Please check the file encoding and try again.');
+      setProgressText('');
+      return;
+    }
+    setProgressText('Validating...');
 
-        for (const f of fields) {
-          const trimmed = trimVal(row[f.key]);
-          if (f.required && isBlank(row[f.key])) {
-            validationErrors.push({ row: rowNumber, msg: `Missing required "${f.label}"` });
+    // --- Step 2: Header validation ---
+    if (rows.length > 0) {
+      const fileHeaders = Object.keys(rows[0]);
+      const missingRequired = fields
+        .filter((f) => f.required)
+        .filter((f) => !fileHeaders.includes(f.key))
+        .map((f) => `"${f.key}" (${f.label})`);
+      if (missingRequired.length > 0) {
+        alert(`The CSV file is missing required column(s):\n${missingRequired.join('\n')}\n\nPlease download the template and ensure all required columns are present.`);
+        setProgressText('');
+        return;
+      }
+    }
+
+    // --- Step 3: Local validation + within-file duplicate detection ---
+    const validationErrors: { row: number; msg: string }[] = [];
+    const duplicateErrors: { row: number; msg: string }[] = [];
+    const seenValues = new Map<string, Map<string, number>>();
+    fields.filter((f) => f.unique).forEach((f) => seenValues.set(f.key, new Map<string, number>()));
+
+    rows.forEach((row, rowIndex) => {
+      const rowNumber = rowIndex + 2;
+      let isValid = true;
+
+      for (const f of fields) {
+        const trimmed = trimVal(row[f.key]);
+        if (f.required && isBlank(row[f.key])) {
+          validationErrors.push({ row: rowNumber, msg: `Missing required "${f.label}"` });
+          isValid = false;
+        }
+        if (f.type === 'number' && !isBlank(row[f.key]) && toTrimmedNum(row[f.key]) === null) {
+          validationErrors.push({ row: rowNumber, msg: `"${f.label}" must be a number, got "${trimmed}"` });
+          isValid = false;
+        }
+        if (f.type === 'number' && f.min != null && !isBlank(row[f.key])) {
+          const n = toTrimmedNum(row[f.key]);
+          if (n !== null && n < f.min) {
+            validationErrors.push({ row: rowNumber, msg: `"${f.label}" must be ${f.min} or greater, got ${n}` });
             isValid = false;
           }
-          if (f.type === 'number' && !isBlank(row[f.key]) && toTrimmedNum(row[f.key]) === null) {
-            validationErrors.push({ row: rowNumber, msg: `"${f.label}" must be a number, got "${trimmed}"` });
+        }
+        if (f.type === 'number' && f.max != null && !isBlank(row[f.key])) {
+          const n = toTrimmedNum(row[f.key]);
+          if (n !== null && n > f.max) {
+            validationErrors.push({ row: rowNumber, msg: `"${f.label}" must be ${f.max} or less, got ${n}` });
             isValid = false;
           }
-          if (f.type === 'number' && f.min != null && !isBlank(row[f.key])) {
-            const n = toTrimmedNum(row[f.key]);
-            if (n !== null && n < f.min) {
-              validationErrors.push({ row: rowNumber, msg: `"${f.label}" must be ${f.min} or greater, got ${n}` });
+        }
+        if (f.options && !isBlank(row[f.key]) && !f.options.includes(trimmed)) {
+          validationErrors.push({ row: rowNumber, msg: `"${f.label}" must be one of: ${f.options.join(', ')}` });
+          isValid = false;
+        }
+      }
+
+      if (customValidate) {
+        const customErrors = customValidate(row, rowNumber);
+        for (const msg of customErrors) {
+          validationErrors.push({ row: rowNumber, msg });
+          isValid = false;
+        }
+      }
+
+      if (!isValid) return;
+
+      for (const f of fields) {
+        if (f.unique) {
+          const normalized = trimVal(row[f.key]).toLowerCase();
+          if (normalized !== '') {
+            const seenMap = seenValues.get(f.key)!;
+            if (seenMap.has(normalized)) {
+              duplicateErrors.push({ row: rowNumber, msg: `Duplicate value "${trimVal(row[f.key])}" for "${f.label}" (already at row ${seenMap.get(normalized)})` });
               isValid = false;
+              break;
             }
-          }
-          if (f.type === 'number' && f.max != null && !isBlank(row[f.key])) {
-            const n = toTrimmedNum(row[f.key]);
-            if (n !== null && n > f.max) {
-              validationErrors.push({ row: rowNumber, msg: `"${f.label}" must be ${f.max} or less, got ${n}` });
-              isValid = false;
-            }
-          }
-          if (f.options && !isBlank(row[f.key]) && !f.options.includes(trimmed)) {
-            validationErrors.push({ row: rowNumber, msg: `"${f.label}" must be one of: ${f.options.join(', ')}` });
-            isValid = false;
+            seenMap.set(normalized, rowNumber);
           }
         }
+      }
+    });
 
-        if (customValidate) {
-          const customErrors = customValidate(row, rowNumber);
-          for (const msg of customErrors) {
-            validationErrors.push({ row: rowNumber, msg });
-            isValid = false;
-          }
-        }
+    // --- Step 4: Server-side duplicate check (against DB records) ---
+    let serverErrors: { row: number; msg: string }[] = [];
+    if (validateEndpoint && rows.length > 0) {
+      setProgressText('Checking for existing records...');
+      serverErrors = await validateAgainstServer(validateEndpoint, rows, fields, getAuthHeaders);
+    }
 
-        if (!isValid) return;
+    const allDuplicateErrors = [...duplicateErrors, ...serverErrors];
 
-        for (const f of fields) {
-          if (f.unique) {
-            const normalized = trimVal(row[f.key]).toLowerCase();
-            if (normalized !== '') {
-              const seenMap = seenValues.get(f.key)!;
-              if (seenMap.has(normalized)) {
-                duplicateErrors.push({ row: rowNumber, msg: `Duplicate value "${trimVal(row[f.key])}" for "${f.label}" (already at row ${seenMap.get(normalized)})` });
-                isValid = false;
-                break;
-              }
-              seenMap.set(normalized, rowNumber);
-            }
-          }
-        }
-      });
+    setParsed(rows);
+    setValidationErrors(validationErrors);
+    setDuplicateErrors(allDuplicateErrors);
+    setStage('validate');
 
-      setParsed(rows);
-      setValidationErrors(validationErrors);
-      setDuplicateErrors(duplicateErrors);
-      setStage('validate');
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ stage: 'validate', fileName: file.name, totalRows: rows.length }));
+    } catch {}
 
-      try {
-        sessionStorage.setItem(SESSION_KEY, JSON.stringify({ stage: 'validate', fileName: file.name, totalRows: rows.length }));
-      } catch {}
-
-      const sessionId = `imp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const validRows = rows.length - new Set([...validationErrors.map((e) => e.row), ...duplicateErrors.map((e) => e.row)]).size;
-      const totalChunks = Math.ceil(validRows / chunkSize);
-      const newSession: UploadSession = {
-        id: sessionId,
-        startedAt: Date.now(),
-        totalRows: validRows,
-        chunkSize,
-        totalChunks,
-        processedChunks: 0,
-        ok: 0,
-        fail: 0,
-        errors: [],
-        entryIds: [],
-        stage: 'idle',
-        fileName: file.name,
-      };
-      setSession(newSession);
-      try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(newSession)); } catch {}
+    const sessionId = `imp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const validRows = rows.length - new Set([...validationErrors.map((e) => e.row), ...allDuplicateErrors.map((e) => e.row)]).size;
+    const totalChunks = Math.ceil(validRows / chunkSize);
+    const newSession: UploadSession = {
+      id: sessionId,
+      startedAt: Date.now(),
+      totalRows: validRows,
+      chunkSize,
+      totalChunks,
+      processedChunks: 0,
+      ok: 0,
+      fail: 0,
+      errors: [],
+      entryIds: [],
+      stage: 'idle',
+      fileName: file.name,
     };
-    reader.readAsText(file);
+    setSession(newSession);
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(newSession)); } catch {}
+    setProgressText('');
   };
 
   const safeApiPost = async (url: string, body: any): Promise<any> => {
@@ -334,6 +490,69 @@ export default function EnterpriseUploadWizard({
     }
   };
 
+  /** Wraps safeApiPost with transparent retries for transient failures */
+  const safeApiPostWithRetry = async (url: string, body: any): Promise<any> => {
+    for (let attempt = 0; attempt <= MAX_CHUNK_RETRIES; attempt++) {
+      try {
+        return await safeApiPost(url, body);
+      } catch (e: any) {
+        // Don't retry if server sent partial results (those are already processed) or a timeout
+        if (e.results?.length > 0) throw e;
+        if (e.name === 'AbortError') throw e;
+        if (attempt < MAX_CHUNK_RETRIES) {
+          const delay = Math.pow(2, attempt) * 1000;
+          setProgressText(`Retrying chunk (attempt ${attempt + 2}/${MAX_CHUNK_RETRIES + 1})...`);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw e;
+      }
+    }
+  };
+
+  /** Normalise chunk upload response into { ok, fail, errors, entryIds } */
+  const parseChunkResponse = (
+    res: any,
+    chunk: Record<string, any>[],
+    serverOk?: number,
+    serverFail?: number,
+  ): { ok: number; fail: number; errors: { row: number; msg: string }[]; entryIds: number[] } => {
+    if (!res || typeof res !== 'object') {
+      // No response body — assume all rows in the chunk succeeded
+      return { ok: chunk.length, fail: 0, errors: [], entryIds: [] };
+    }
+    if (Array.isArray(res)) {
+      if (res.length > 0 && res[0] && typeof res[0] === 'object' && '_csvRow' in res[0]) {
+        const succeeded = new Set(res.map((r: any) => Number(r._csvRow)));
+        let ok = 0, fail = 0;
+        const errors: { row: number; msg: string }[] = [];
+        const entryIds: number[] = [];
+        for (const row of chunk) {
+          if (succeeded.has(Number(row._csvRow))) ok++;
+          else { fail++; errors.push({ row: Number(row._csvRow), msg: 'Server did not return this record' }); }
+        }
+        for (const r of res) { if (r.entry_id) entryIds.push(Number(r.entry_id)); }
+        return { ok, fail, errors, entryIds };
+      }
+      return { ok: chunk.length, fail: 0, errors: [], entryIds: [] };
+    }
+    // Object response: { ok, results } | { ok, fail } | { ok, fail, results }
+    const ok = typeof serverOk === 'number' ? serverOk : (typeof res.ok === 'number' ? res.ok : chunk.length);
+    const fail = typeof serverFail === 'number' ? serverFail : (typeof res.fail === 'number' ? res.fail : 0);
+    const errors: { row: number; msg: string }[] = [];
+    const entryIds: number[] = [];
+    if (Array.isArray(res.results)) {
+      let idx = 0;
+      for (const r of res.results) {
+        const csvRow = r._csvRow || (chunk[idx]?._csvRow) || 0;
+        if (r.entry_id) entryIds.push(Number(r.entry_id));
+        if (r.error) errors.push({ row: Number(csvRow), msg: String(r.error) });
+        idx++;
+      }
+    }
+    return { ok, fail, errors, entryIds };
+  };
+
   const commit = async () => {
     if (!session || committing) return;
     setCommitting(true);
@@ -362,19 +581,7 @@ export default function EnterpriseUploadWizard({
     const total = payload.length;
     const totalChunks = Math.ceil(total / chunkSize);
 
-    if (sortBeforeUpload) {
-      payload.sort((a, b) => {
-        for (const key of Object.keys(a)) {
-          if (key === '_csvRow') continue;
-          const va = String(a[key] ?? '');
-          const vb = String(b[key] ?? '');
-          if (va < vb) return -1;
-          if (va > vb) return 1;
-        }
-        return 0;
-      });
-    }
-
+    // Nozzle gap-fill runs BEFORE sort so it processes rows in original parse order (chronological)
     const hasOpeningReading = fields.some((f) => f.key === 'opening_reading');
     const hasClosingReading = fields.some((f) => f.key === 'closing_reading');
     const hasNozzleName = fields.some((f) => f.key === 'nozzle_name');
@@ -390,6 +597,19 @@ export default function EnterpriseUploadWizard({
         }
         lastClosingByNozzle.set(nozzle, Number(row.closing_reading));
       }
+    }
+
+    if (sortBeforeUpload) {
+      payload.sort((a, b) => {
+        for (const key of Object.keys(a)) {
+          if (key === '_csvRow') continue;
+          const va = String(a[key] ?? '');
+          const vb = String(b[key] ?? '');
+          if (va < vb) return -1;
+          if (va > vb) return 1;
+        }
+        return 0;
+      });
     }
 
     setStage('import');
@@ -414,43 +634,25 @@ export default function EnterpriseUploadWizard({
         : `Uploading ${total} records...`);
 
       try {
-        const res = await safeApiPost(endpoint, chunk);
-        if (res && typeof res === 'object') {
-          if (typeof res.ok === 'number' && Array.isArray(res.results)) {
-            ok += res.ok;
-            fail += res.fail;
-            let resultIdx = 0;
-            for (const r of res.results) {
-              const csvRow = r._csvRow || (chunk[resultIdx]?._csvRow) || 0;
-              if (r.entry_id) entryIds.push(Number(r.entry_id));
-              if (r.error) errors.push({ row: Number(csvRow), msg: String(r.error) });
-              resultIdx++;
-            }
-          } else if (typeof res.ok === 'number') {
-            ok += res.ok;
-            fail += res.fail;
-          } else {
-            ok += chunk.length;
-          }
-        } else {
-          ok += chunk.length;
-        }
+        const res = await safeApiPostWithRetry(endpoint, chunk);
+        const parsed = parseChunkResponse(res, chunk);
+        ok += parsed.ok;
+        fail += parsed.fail;
+        for (const e of parsed.errors) errors.push(e);
+        for (const id of parsed.entryIds) entryIds.push(id);
       } catch (e: any) {
         if (e.results && Array.isArray(e.results) && e.results.length > 0) {
-          if (typeof e.serverOk === 'number') ok += e.serverOk;
-          if (typeof e.serverFail === 'number') fail += e.serverFail;
-          for (const r of e.results) {
-            const csvRow = r._csvRow || 0;
-            if (r.error) errors.push({ row: Number(csvRow), msg: String(r.error) });
-            if (r.entry_id) entryIds.push(Number(r.entry_id));
-          }
+          const parsed = parseChunkResponse(e, chunk, e.serverOk, e.serverFail);
+          ok += parsed.ok;
+          fail += parsed.fail;
+          for (const err of parsed.errors) errors.push(err);
+          for (const id of parsed.entryIds) entryIds.push(id);
         } else {
           const msg = e?.message || e?.error || `Chunk ${chunkIdx} failed`;
           fail += chunk.length;
           for (const r of chunk) errors.push({ row: Number(r._csvRow), msg });
           if (msg.includes('Request timed out')) {
             haltedByTimeout = true;
-            const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
             setProgressText(`Stopped after chunk ${chunkIdx}/${totalChunks}. The server did not reply within ${Math.round(requestTimeoutMs / 1000)} seconds.`);
             for (let j = i + chunkSize; j < total; j += chunkSize) {
               const remainingChunk = payload.slice(j, j + chunkSize);
@@ -626,7 +828,7 @@ export default function EnterpriseUploadWizard({
                 <Upload className="w-4 h-4" /> Choose File
                 <input ref={fileInputRef} type="file" accept=".csv" onChange={onFileSelect} className="hidden" />
               </label>
-              <p className="text-xs text-slate-400 mt-3">Maximum file size: {MAX_FILE_SIZE / 1024 / 1024}MB</p>
+              <p className="text-xs text-slate-400 mt-3">Maximum file size: {maxFileSizeMb}MB</p>
             </div>
           </div>
         </Card>
@@ -676,7 +878,7 @@ export default function EnterpriseUploadWizard({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {parsed.slice(0, 100).map((r, i) => {
+                {parsed.slice(0, maxPreviewRows).map((r, i) => {
                   const rowNum = i + 2;
                   const hasErr = validationErrors.some((e) => e.row === rowNum) || duplicateErrors.some((e) => e.row === rowNum);
                   return (
@@ -693,7 +895,7 @@ export default function EnterpriseUploadWizard({
                     </tr>
                   );
                 })}
-                {parsed.length > 100 && <tr><td colSpan={fields.length + 1} className="px-3 py-2 text-xs text-slate-400 text-center italic">...and {parsed.length - 100} more rows</td></tr>}
+                {parsed.length > maxPreviewRows && <tr><td colSpan={fields.length + 1} className="px-3 py-2 text-xs text-slate-400 text-center italic">...and {parsed.length - maxPreviewRows} more rows</td></tr>}
               </tbody>
             </table>
           </div>

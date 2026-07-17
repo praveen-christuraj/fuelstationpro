@@ -8,6 +8,9 @@ export default function TankerUnloadingUpload() {
       endpoint="/api/tanker-unloading/import"
       undoEndpoint="/api/tanker-unloading/undo"
       templateName="tanker_unloading"
+      chunkSize={20}
+      requestTimeoutMs={60000}
+      sortBeforeUpload={false}
       fields={[
         { key: 'unload_date', label: 'Unload Date', type: 'date', required: true, example: '2026-06-13' },
         { key: 'tanker_number', label: 'Tanker Number', required: true, example: 'KA01AB1234' },

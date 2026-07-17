@@ -38,6 +38,8 @@ import ProjectPlan from './pages/docs/ProjectPlan';
 import Backend from './pages/docs/Backend';
 import Android from './pages/docs/Android';
 import Testing from './pages/docs/Testing';
+import Permissions from './pages/admin/Permissions';
+import AdminUsers from './pages/admin/Users';
 
 const P = ({ children }: { children: React.ReactNode }) => <ProtectedRoute><Layout>{children}</Layout></ProtectedRoute>;
 
@@ -78,6 +80,8 @@ export default function App() {
           <Route path="/bulk/credit-sales" element={<P><CreditSalesUpload /></P>} />
           <Route path="/bulk/tanker-unloading" element={<P><TankerUnloadingUpload /></P>} />
           <Route path="/bulk/price-history" element={<P><PriceHistoryUpload /></P>} />
+          <Route path="/admin/users" element={<P><AdminUsers /></P>} />
+          <Route path="/admin/permissions" element={<P><Permissions /></P>} />
           <Route path="/docs/project-plan" element={<P><ProjectPlan /></P>} />
           <Route path="/docs/backend" element={<P><Backend /></P>} />
           <Route path="/docs/android" element={<P><Android /></P>} />

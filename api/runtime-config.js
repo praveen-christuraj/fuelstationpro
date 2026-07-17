@@ -40,6 +40,7 @@ const ALLOWED_RESOURCES = new Set([
   'finance-transactions',
   'finance_transactions',
   'calibration',
+  'admin',
 ]);
 
 export function getRequiredServerEnv(name) {

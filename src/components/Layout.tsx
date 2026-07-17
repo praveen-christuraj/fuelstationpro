@@ -1,68 +1,62 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Fuel, LayoutDashboard, Database, Truck, Gauge, ClipboardList, Wallet, BarChart3, Upload, BookOpen, LogOut, Menu, X, ChevronDown, Boxes, Settings2, FileText, TrendingUp } from 'lucide-react';
+import {
+  Fuel, LayoutDashboard, Database, Truck, Gauge, ClipboardList,
+  Wallet, BarChart3, Upload, BookOpen, LogOut, Menu, X, ChevronDown,
+  Boxes, Settings2, FileText, TrendingUp,
+} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { PAGE_REGISTRY, GROUP_ORDER } from '../lib/page-registry';
 import { ConfirmModal } from './ui/Modal';
 
 interface NavItem { to?: string; label: string; icon: any; }
 interface NavGroup { label: string; icon: any; items: NavItem[]; }
 
-const groups: NavGroup[] = [
-  { label: 'Overview', icon: LayoutDashboard, items: [ { to: '/', label: 'Dashboard', icon: LayoutDashboard } ] },
-  { label: 'Master Setup', icon: Settings2, items: [
-    { to: '/master/products', label: 'Products', icon: Boxes },
-    { to: '/master/price-history', label: 'Price History', icon: BarChart3 },
-    { to: '/master/tanks', label: 'Tanks & Calibration', icon: Database },
-    { to: '/master/dispensers', label: 'Dispensers', icon: Gauge },
-    { to: '/master/nozzles', label: 'Nozzles', icon: Gauge },
-    { to: '/master/meters', label: 'Meters', icon: Gauge },
-    { to: '/master/operators', label: 'Operators', icon: ClipboardList },
-    { to: '/master/shifts', label: 'Shifts', icon: ClipboardList },
-    { to: '/master/bank-accounts', label: 'Bank Accounts', icon: Wallet },
-    { to: '/master/suppliers', label: 'Suppliers', icon: Truck },
-  ]},
-  { label: 'Operations', icon: Truck, items: [
-    { to: '/ops/tanker-unloading', label: 'Tanker Unloading', icon: Truck },
-    { to: '/ops/dip-readings', label: 'Dip Readings', icon: Database },
-    { to: '/ops/dip-volume', label: 'Dip-to-Volume', icon: Database },
-    { to: '/ops/stock', label: 'Stock In / Out', icon: Boxes },
-    { to: '/ops/sales', label: 'Daily Sales Entry', icon: ClipboardList },
-    { to: '/ops/loss-gain', label: 'Loss / Gain Analysis', icon: BarChart3 },
-  ]},
-  { label: 'Finance', icon: Wallet, items: [
-    { to: '/finance/credit-sales', label: 'Credit Sales', icon: ClipboardList },
-    { to: '/finance/management', label: 'Finance Management', icon: Wallet },
-  ]},
-  { label: 'Reports', icon: BarChart3, items: [
-    { to: '/reports', label: 'Report Hub', icon: BarChart3 },
-    { to: '/reports/daily-sales', label: 'Daily Sales Report', icon: ClipboardList },
-    { to: '/reports/tanker-unloading', label: 'Tanker Unloading Report', icon: Truck },
-    { to: '/reports/price-history', label: 'Price History Report', icon: TrendingUp },
-  ]},
-  { label: 'Bulk Upload', icon: Upload, items: [
-    { to: '/bulk/daily-sales', label: 'Daily Sales Upload', icon: Upload },
-    { to: '/bulk/tank-data', label: 'Tank Data Upload', icon: Upload },
-    { to: '/bulk/calibration', label: 'Calibration Upload', icon: Upload },
-    { to: '/bulk/dip-readings', label: 'Dip Readings Upload', icon: Upload },
-    { to: '/bulk/inventory', label: 'Inventory Upload', icon: Upload },
-    { to: '/bulk/credit-sales', label: 'Credit Sales Upload', icon: Upload },
-    { to: '/bulk/tanker-unloading', label: 'Tanker Unloading Upload', icon: Upload },
-    { to: '/bulk/price-history', label: 'Price History Upload', icon: Upload },
-  ]},
-  { label: 'Documentation', icon: BookOpen, items: [
-    { to: '/docs/project-plan', label: 'Project Plan', icon: FileText },
-    { to: '/docs/backend', label: 'Backend & DB Design', icon: Database },
-    { to: '/docs/android', label: 'Android Guide', icon: BookOpen },
-    { to: '/docs/testing', label: 'Testing & Go Live', icon: ClipboardList },
-  ]},
-];
+/** Map string icon names (from page-registry) to Lucide components */
+const iconMap: Record<string, any> = {
+  LayoutDashboard, Database, Truck, Gauge, ClipboardList,
+  Wallet, BarChart3, Upload, BookOpen, Boxes, Settings2, FileText, TrendingUp,
+};
+
+/** Map group labels to their Lucide icon */
+const groupIconMap: Record<string, any> = {
+  'Overview': LayoutDashboard,
+  'Master Setup': Settings2,
+  'Operations': Truck,
+  'Finance': Wallet,
+  'Reports': BarChart3,
+  'Bulk Upload': Upload,
+  'Documentation': BookOpen,
+  'Admin': Settings2,
+};
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { user, signOut } = useAuth();
+  const { user, signOut, hasPageAccess, role } = useAuth();
   const nav = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [open, setOpen] = useState<Record<string, boolean>>({ Overview: true, 'Master Setup': true, Operations: true, Finance: false, Reports: false, 'Bulk Upload': false, Documentation: false });
   const [confirmLogout, setConfirmLogout] = useState(false);
+
+  /** Build nav groups from the page registry, filtered by permissions */
+  const groups = useMemo<NavGroup[]>(() => {
+    const allowed = PAGE_REGISTRY.filter((p) => hasPageAccess(p.path));
+    const groupsMap = new Map<string, NavItem[]>();
+    for (const p of allowed) {
+      if (!groupsMap.has(p.group)) groupsMap.set(p.group, []);
+      groupsMap.get(p.group)!.push({ to: p.path, label: p.label, icon: iconMap[p.icon] || ClipboardList });
+    }
+    // Preserve group order from GROUP_ORDER
+    return GROUP_ORDER
+      .filter((g) => groupsMap.has(g))
+      .map((g) => ({ label: g, icon: groupIconMap[g] || LayoutDashboard, items: groupsMap.get(g)! }));
+  }, [hasPageAccess]);
+
+  // Collect group labels for collapse state defaults
+  const defaultOpen: Record<string, boolean> = useMemo(() => {
+    const o: Record<string, boolean> = {};
+    for (const g of groups) o[g.label] = true;
+    return o;
+  }, [groups]);
+  const [open, setOpen] = useState<Record<string, boolean>>(defaultOpen);
 
   const handleLogout = async () => { await signOut(); nav('/login'); };
 
@@ -99,7 +93,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-semibold">{(user?.email || 'U')[0].toUpperCase()}</div>
           <div className="flex-1 min-w-0">
             <div className="text-xs font-medium text-white truncate">{user?.email}</div>
-            <div className="text-[10px] text-slate-400">Administrator</div>
+            <div className="text-[10px] text-slate-400 capitalize">{role === 'admin' ? 'Administrator' : 'Data Entry'}</div>
           </div>
           <button onClick={() => setConfirmLogout(true)} className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-rose-400" title="Sign out"><LogOut className="w-4 h-4" /></button>
         </div>
@@ -107,7 +101,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </div>
     </div>
   );
-
 
   return (
     <div className="min-h-screen bg-slate-50">

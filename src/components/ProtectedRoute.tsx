@@ -1,10 +1,12 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Fuel } from 'lucide-react';
+import { PAGE_REGISTRY } from '../lib/page-registry';
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
-  
+  const { user, loading, hasPageAccess } = useAuth();
+  const location = useLocation();
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-50">
@@ -17,5 +19,12 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
   }
 
   if (!user) return <Navigate to="/login" replace />;
+
+  // RBAC: redirect to first allowed page if this path is not permitted
+  if (!hasPageAccess(location.pathname)) {
+    const firstAllowed = PAGE_REGISTRY.find((p) => hasPageAccess(p.path));
+    return <Navigate to={firstAllowed?.path || '/'} replace />;
+  }
+
   return <>{children}</>;
 }

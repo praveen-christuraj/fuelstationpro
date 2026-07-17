@@ -315,6 +315,9 @@ export default async function handler(req, res) {
     if (parts[0] === 'buffer-transfer' && req.method === 'POST') {
       return await handleBufferTransfer(req, res);
     }
+    if (parts[0] === 'admin' && parts[1] === 'users') {
+      return await handleAdminUsers(req, res, auth);
+    }
     if (parts[0] === 'sales' && req.method === 'POST') {
       return await handleSalesCreate(req, res);
     }
@@ -652,6 +655,93 @@ async function handleCalibration(req, res, tankId) {
   }
 
   res.status(405).json({ error: 'Method not allowed' });
+}
+
+async function handleAdminUsers(req, res, auth) {
+  // Only admins can manage users
+  const role = auth.user?.user_metadata?.role || 'data_entry';
+  if (role !== 'admin') {
+    return res.status(403).json({ error: 'Only administrators can manage users' });
+  }
+
+  try {
+    if (req.method === 'GET') {
+      const { data, error } = await supabase.auth.admin.listUsers();
+      if (error) throw error;
+      const safeUsers = (data?.users || []).map((u) => ({
+        id: u.id,
+        email: u.email,
+        role: u.user_metadata?.role || 'data_entry',
+        display_name: u.user_metadata?.display_name || '',
+        created_at: u.created_at,
+        last_sign_in_at: u.last_sign_in_at,
+        email_confirmed_at: u.email_confirmed_at,
+      }));
+      return res.status(200).json(safeUsers);
+    }
+
+    if (req.method === 'POST') {
+      const { email, password, role: userRole, display_name } = req.body || {};
+      if (!email) return res.status(400).json({ error: 'Email is required' });
+      if (!password) return res.status(400).json({ error: 'Password is required' });
+      const validRoles = ['admin', 'data_entry'];
+      const assignRole = validRoles.includes(userRole) ? userRole : 'data_entry';
+      const { data, error } = await supabase.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { role: assignRole, display_name: display_name || '' },
+      });
+      if (error) throw error;
+      return res.status(201).json({
+        id: data.user.id,
+        email: data.user.email,
+        role: data.user.user_metadata?.role || 'data_entry',
+        display_name: data.user.user_metadata?.display_name || '',
+      });
+    }
+
+    if (req.method === 'PUT') {
+      const { id, role: newRole, display_name } = req.body || {};
+      if (!id) return res.status(400).json({ error: 'User ID is required' });
+      if (!newRole) return res.status(400).json({ error: 'Role is required' });
+      const validRoles = ['admin', 'data_entry'];
+      if (!validRoles.includes(newRole)) {
+        return res.status(400).json({ error: 'Role must be admin or data_entry' });
+      }
+      // Build metadata update — preserve any existing fields
+      const { data: existingUser, error: fetchErr } = await supabase.auth.admin.getUserById(id);
+      if (fetchErr) throw fetchErr;
+      const existingMeta = existingUser?.user?.user_metadata || {};
+      const { data, error } = await supabase.auth.admin.updateUserById(id, {
+        user_metadata: { ...existingMeta, role: newRole, ...(display_name ? { display_name } : {}) },
+      });
+      if (error) throw error;
+      return res.status(200).json({
+        id: data.user.id,
+        email: data.user.email,
+        role: data.user.user_metadata?.role || 'data_entry',
+        display_name: data.user.user_metadata?.display_name || '',
+      });
+    }
+
+    if (req.method === 'DELETE') {
+      const { id } = req.body || {};
+      if (!id) return res.status(400).json({ error: 'User ID is required' });
+      if (id === auth.user.id) {
+        return res.status(400).json({ error: 'You cannot delete your own account' });
+      }
+      const { error } = await supabase.auth.admin.deleteUser(id);
+      if (error) throw error;
+      return res.status(200).json({ ok: true });
+    }
+
+    res.status(405).json({ error: 'Method not allowed' });
+  } catch (err) {
+    console.error('Admin users error:', err);
+    const message = err?.message || err?.error || 'Internal server error';
+    return res.status(400).json({ error: message });
+  }
 }
 
 async function handleSalesCreate(req, res) {

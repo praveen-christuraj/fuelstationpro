@@ -395,3 +395,23 @@ DO $$BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'meters_serial_no_key') THEN ALTER TABLE meters ADD CONSTRAINT meters_serial_no_key UNIQUE (serial_no); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bank_accounts_account_no_key') THEN ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_account_no_key UNIQUE (account_no); END IF;
 END$$;
+
+-- 25. role_permissions — admin-configurable page access per role
+CREATE TABLE IF NOT EXISTS role_permissions (
+  id bigint primary key generated always as identity,
+  role text not null check (role in ('admin', 'data_entry')),
+  page_key text not null,
+  enabled boolean default true,
+  created_at timestamptz default now(),
+  unique (role, page_key)
+);
+
+-- Seed default permissions for data_entry role (safe to re-run)
+INSERT INTO role_permissions (role, page_key, enabled)
+SELECT 'data_entry', key, true
+FROM (VALUES
+  ('ops_sales'),
+  ('ops_tanker_unloading'),
+  ('ops_dip_readings')
+) AS t(key)
+WHERE NOT EXISTS (SELECT 1 FROM role_permissions WHERE role = 'data_entry');
