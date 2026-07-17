@@ -315,6 +315,9 @@ export default async function handler(req, res) {
     if (parts[0] === 'buffer-transfer' && req.method === 'POST') {
       return await handleBufferTransfer(req, res);
     }
+    if (parts[0] === 'admin' && parts[1] === 'bootstrap-check') {
+      return await handleAdminBootstrapCheck(req, res, auth);
+    }
     if (parts[0] === 'admin' && parts[1] === 'bootstrap') {
       return await handleAdminBootstrap(req, res, auth);
     }
@@ -658,6 +661,26 @@ async function handleCalibration(req, res, tankId) {
   }
 
   res.status(405).json({ error: 'Method not allowed' });
+}
+
+async function handleAdminBootstrapCheck(req, res, auth) {
+  // No auth guard — returns status info for debugging
+  try {
+    const { data: allUsers, error: listErr } = await supabase.auth.admin.listUsers();
+    if (listErr) throw listErr;
+    const adminCount = (allUsers?.users || []).filter(
+      (u) => u.user_metadata?.role === 'admin'
+    ).length;
+    return res.status(200).json({
+      your_role: auth.user?.user_metadata?.role || 'data_entry',
+      your_id: auth.user?.id,
+      your_email: auth.user?.email,
+      admin_count: adminCount,
+      total_users: (allUsers?.users || []).length,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || 'Check failed' });
+  }
 }
 
 async function handleAdminBootstrap(req, res, auth) {

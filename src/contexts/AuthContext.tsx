@@ -42,10 +42,30 @@ async function fetchPermissions(role: Role): Promise<Set<string>> {
     if (data && data.length > 0) {
       return new Set(data.map((r: any) => r.page_key));
     }
-    // Fall back to defaults when table is empty or role has no rows
     return new Set(DEFAULT_DATA_ENTRY_KEYS);
   } catch {
     return new Set(DEFAULT_DATA_ENTRY_KEYS);
+  }
+}
+
+/** Attempt to bootstrap the first admin user — called immediately on auth state change */
+async function tryBootstrap(accessToken: string): Promise<void> {
+  try {
+    const res = await fetch('/api/admin/bootstrap', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const body = await res.json();
+    if (body.promoted) {
+      console.log('[Bootstrap] ✅ You are now admin! Refreshing session...');
+      await supabase.auth.refreshSession();
+    } else if (body.error) {
+      console.warn('[Bootstrap] API returned error:', body.error);
+    } else {
+      console.log('[Bootstrap] Admin already exists — no promotion needed');
+    }
+  } catch (err) {
+    console.warn('[Bootstrap] Fetch failed (expected if running locally without API):', err);
   }
 }
 
@@ -62,8 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** Fetch permissions from DB for the current role */
   const refreshPermissions = useCallback(async () => {
     if (role === 'admin') {
-      // Admin has access to ALL pages — no need to query
-      setAllowedPageKeys(new Set(DEFAULT_DATA_ENTRY_KEYS)); // placeholder, see hasPageAccess
+      setAllowedPageKeys(new Set(DEFAULT_DATA_ENTRY_KEYS));
       return;
     }
     const keys = await fetchPermissions(role);
@@ -71,72 +90,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [role]);
 
   const hasPageAccess = useCallback((path: string): boolean => {
-    if (isAdmin) return true; // admin sees everything
-    // Unknown paths (404, login) are always allowed
+    if (isAdmin) return true;
     const entry = pageByPath[path];
     if (!entry) return true;
     return allowedPageKeys.has(entry.key);
   }, [isAdmin, allowedPageKeys]);
 
+  /** Shared handler — runs on initial load AND every auth state change */
+  const handleAuthEvent = useCallback((session: Session | null) => {
+    setSession(session);
+    setUser(session?.user ?? null);
+    setLoading(false);
+
+    // If user is NOT admin and we haven't tried bootstrapping yet, try it NOW
+    if (
+      session?.access_token &&
+      session?.user?.user_metadata?.role !== 'admin' &&
+      !bootstrapAttempted.current
+    ) {
+      bootstrapAttempted.current = true;
+      tryBootstrap(session.access_token);
+    }
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
 
-    const initializeAuth = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (isMounted) {
-          setSession(session);
-          setUser(session?.user ?? null);
-        }
-      } catch (error) {
-        console.error('Error initializing auth session:', error);
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
-      }
-    };
-
-    initializeAuth();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
+    // Initial load — get existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (isMounted) handleAuthEvent(session);
+    }).catch((error) => {
+      console.error('Error initializing auth session:', error);
+      if (isMounted) setLoading(false);
     });
 
-    return () => {
-      subscription.unsubscribe();
-      isMounted = false;
-    };
-  }, []);
+    // Subscribe to future auth changes (login, token refresh, logout)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
+      if (isMounted) handleAuthEvent(session);
+    });
 
-  // Fetch permissions whenever the role changes (e.g. after login)
+    return () => { isMounted = false; subscription.unsubscribe(); };
+  }, [handleAuthEvent]);
+
+  // Fetch permissions whenever role changes
   useEffect(() => {
     if (!loading && user) {
       if (isAdmin) {
-        setAllowedPageKeys(EMPTY_SET); // admin bypass — not used
+        setAllowedPageKeys(EMPTY_SET);
       } else {
         fetchPermissions(role).then(setAllowedPageKeys);
-        // Auto-bootstrap: if no admin exists yet, promote this first user
-        if (!bootstrapAttempted.current && session?.access_token) {
-          bootstrapAttempted.current = true;
-          fetch('/api/admin/bootstrap', {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          })
-            .then((r) => r.json())
-            .then((res) => {
-              if (res.promoted) {
-                // Session metadata updated server-side — refresh to pick it up
-                supabase.auth.refreshSession();
-              }
-            })
-            .catch(() => {/* best-effort */});
-        }
       }
     }
-  }, [loading, user, isAdmin, role, session?.access_token]);
+  }, [loading, user, isAdmin, role]);
 
   const signOut = async () => { await supabase.auth.signOut(); };
 
