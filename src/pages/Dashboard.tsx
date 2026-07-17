@@ -24,7 +24,7 @@ export default function Dashboard() {
 
   // Redirect data_entry users away from dashboard to their first allowed page
   useEffect(() => {
-    if (role === 'data_entry') nav.replace('/ops/sales');
+    if (role === 'data_entry') nav('/ops/sales', { replace: true });
   }, [role, nav]);
 
   const load = async () => {
