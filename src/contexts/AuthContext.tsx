@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import supabase from '../lib/supabase';
 import type { Session, User } from '@supabase/supabase-js';
 import { pageByPath, DEFAULT_DATA_ENTRY_KEYS } from '../lib/page-registry';
@@ -54,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [allowedPageKeys, setAllowedPageKeys] = useState<Set<string>>(EMPTY_SET);
+  const bootstrapAttempted = useRef(false);
 
   const role: Role = (user?.user_metadata?.role as Role) || 'data_entry';
   const isAdmin = role === 'admin';
@@ -117,9 +118,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAllowedPageKeys(EMPTY_SET); // admin bypass — not used
       } else {
         fetchPermissions(role).then(setAllowedPageKeys);
+        // Auto-bootstrap: if no admin exists yet, promote this first user
+        if (!bootstrapAttempted.current && session?.access_token) {
+          bootstrapAttempted.current = true;
+          fetch('/api/admin/bootstrap', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          })
+            .then((r) => r.json())
+            .then((res) => {
+              if (res.promoted) {
+                // Session metadata updated server-side — refresh to pick it up
+                supabase.auth.refreshSession();
+              }
+            })
+            .catch(() => {/* best-effort */});
+        }
       }
     }
-  }, [loading, user, isAdmin, role]);
+  }, [loading, user, isAdmin, role, session?.access_token]);
 
   const signOut = async () => { await supabase.auth.signOut(); };
 

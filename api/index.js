@@ -315,6 +315,9 @@ export default async function handler(req, res) {
     if (parts[0] === 'buffer-transfer' && req.method === 'POST') {
       return await handleBufferTransfer(req, res);
     }
+    if (parts[0] === 'admin' && parts[1] === 'bootstrap') {
+      return await handleAdminBootstrap(req, res, auth);
+    }
     if (parts[0] === 'admin' && parts[1] === 'users') {
       return await handleAdminUsers(req, res, auth);
     }
@@ -655,6 +658,32 @@ async function handleCalibration(req, res, tankId) {
   }
 
   res.status(405).json({ error: 'Method not allowed' });
+}
+
+async function handleAdminBootstrap(req, res, auth) {
+  // POST only — no auth required, this is for first-user setup
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+  try {
+    const { data: allUsers, error: listErr } = await supabase.auth.admin.listUsers();
+    if (listErr) throw listErr;
+    const hasAdmin = (allUsers?.users || []).some(
+      (u) => u.user_metadata?.role === 'admin'
+    );
+    if (hasAdmin) {
+      return res.status(200).json({ promoted: false, role: auth.user?.user_metadata?.role || 'data_entry' });
+    }
+    // No admin exists — promote this user
+    const { data, error } = await supabase.auth.admin.updateUserById(auth.user.id, {
+      user_metadata: { ...(auth.user?.user_metadata || {}), role: 'admin' },
+    });
+    if (error) throw error;
+    return res.status(200).json({ promoted: true, role: 'admin' });
+  } catch (err) {
+    console.error('Bootstrap error:', err);
+    return res.status(400).json({ error: err?.message || 'Bootstrap failed' });
+  }
 }
 
 async function handleAdminUsers(req, res, auth) {
