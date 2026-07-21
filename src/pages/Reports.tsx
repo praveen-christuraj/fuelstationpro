@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart3, Truck, ClipboardList, TrendingUp } from 'lucide-react';
+import { BarChart3, Truck, ClipboardList, TrendingUp, Wallet, CreditCard } from 'lucide-react';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Loading, ErrorState } from '../components/ui/States';
@@ -83,6 +83,28 @@ export default function Reports() {
       stats: [
         { label: 'Revisions', value: String(kpis.priceRevisions) },
         { label: 'Drill by', value: 'Product / Date / Inflation' },
+      ],
+    },
+    {
+      path: '/reports/finance',
+      title: 'Finance Report',
+      desc: 'Date-wise shortage/surplus trends, deposit breakdown by category, expense analysis by category, and ledger balance summary across periods.',
+      icon: Wallet,
+      color: 'blue',
+      stats: [
+        { label: 'View', value: 'Shortage Trends / Ledger' },
+        { label: 'Filters', value: 'Date Range' },
+      ],
+    },
+    {
+      path: '/reports/credit-sales',
+      title: 'Credit Sales Report',
+      desc: 'Credit sales status distribution, customer-wise outstanding tracking, settled vs pending analysis, and period-wise credit movement.',
+      icon: CreditCard,
+      color: 'emerald',
+      stats: [
+        { label: 'View', value: 'Status / Customer / Period' },
+        { label: 'Filters', value: 'Date Range / Status' },
       ],
     },
   ];

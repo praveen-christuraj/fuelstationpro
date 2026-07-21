@@ -70,6 +70,9 @@ handoff/
 release-checklist.md
 AI-AGENT-USAGE-GUIDE.md
 
+# Mobile app
+FuelFlowMobile/
+
 # Node artifacts
 /node_modules
 /.pnp

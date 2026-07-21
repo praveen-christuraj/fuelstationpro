@@ -166,7 +166,7 @@ const FIELD_VALIDATIONS = {
   },
   finance_transactions: {
     txn_date: (v) => v != null && String(v).trim() !== '' || 'Transaction date is required',
-    txn_type: (v) => !v || ['Income', 'Expense', 'Deposit', 'Withdrawal'].includes(v) || 'Invalid transaction type',
+    txn_type: (v) => !v || ['Expense', 'Deposit'].includes(v) || 'Invalid transaction type (use Expense or Deposit)',
     amount: (v) => v == null || v === '' || Number(v) >= 0 || 'Amount must be 0 or greater',
   },
 };
@@ -367,6 +367,19 @@ export default async function handler(req, res) {
     }
     if (parts[0] === 'tanker-unloading' && req.method === 'GET') {
       return await handleTankerUnloadingListV2(req, res);
+    }
+    // ── Finance Management & Credit Sales endpoints ──
+    if (parts[0] === 'credit-sales' && parts[1] === 'pending' && req.method === 'GET') {
+      return await handleCreditSalesPending(req, res);
+    }
+    if (parts[0] === 'credit-sales' && parts[1] === 'settle' && req.method === 'POST') {
+      return await handleCreditSalesSettle(req, res);
+    }
+    if (parts[0] === 'finance' && parts[1] === 'summary' && req.method === 'GET') {
+      return await handleFinanceSummary(req, res);
+    }
+    if (parts[0] === 'finance' && parts[1] === 'ledger' && req.method === 'GET') {
+      return await handleFinanceLedger(req, res);
     }
 
     const dbTable = resolveTable(parts[0]);
@@ -3330,4 +3343,301 @@ async function handleTankerUnloadingUndo(req, res) {
     }
   }
   return res.status(ok === 0 ? 400 : 200).json({ ok, fail, results });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Finance Management & Credit Sales — new endpoints
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/credit-sales/pending?date_from=&date_to=
+ * Returns date-wise credit amounts from daily_sales_entries that have
+ * not yet been fully allocated to credit_sales records.
+ */
+async function handleCreditSalesPending(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  const params = new URL(req.url, 'http://localhost').searchParams;
+  const dateFrom = params.get('date_from') || '';
+  const dateTo = params.get('date_to') || '';
+
+  // 1. Fetch all daily_sales_entries that have credit_amount > 0
+  let salesQuery = supabase
+    .from('daily_sales_entries')
+    .select('id, sale_date, shift_name, operator_name, dispenser_name, credit_amount, total_sales_amount')
+    .gt('credit_amount', 0)
+    .order('sale_date', { ascending: false })
+    .order('id', { ascending: false });
+  if (dateFrom) salesQuery = salesQuery.gte('sale_date', dateFrom);
+  if (dateTo) salesQuery = salesQuery.lte('sale_date', dateTo);
+  const { data: salesEntries, error: salesErr } = await salesQuery;
+  if (salesErr) throw salesErr;
+
+  // 2. Fetch all existing credit_sales records to see what's been allocated
+  let creditQuery = supabase
+    .from('credit_sales')
+    .select('id, sale_date, daily_sales_entry_id, customer_name, amount, status, settled_amount');
+  if (dateFrom) creditQuery = creditQuery.gte('sale_date', dateFrom);
+  if (dateTo) creditQuery = creditQuery.lte('sale_date', dateTo);
+  const { data: existingCredits, error: creditErr } = await creditQuery;
+  if (creditErr) throw creditErr;
+
+  // 3. Group existing credits by daily_sales_entry_id and sum allocated amounts
+  const allocatedByEntry = new Map();
+  for (const c of existingCredits || []) {
+    if (c.daily_sales_entry_id) {
+      const key = String(c.daily_sales_entry_id);
+      allocatedByEntry.set(key, (allocatedByEntry.get(key) || 0) + Number(c.amount || 0));
+    }
+  }
+
+  // 4. Build pending list: for each sales entry, compute remaining unallocated credit
+  const pending = [];
+  for (const entry of salesEntries || []) {
+    const totalCredit = Number(entry.credit_amount || 0);
+    const allocated = allocatedByEntry.get(String(entry.id)) || 0;
+    const remaining = Math.round((totalCredit - allocated) * 100) / 100;
+    if (remaining > 0.001) {
+      pending.push({
+        daily_sales_entry_id: entry.id,
+        sale_date: entry.sale_date,
+        shift_name: entry.shift_name,
+        operator_name: entry.operator_name,
+        dispenser_name: entry.dispenser_name,
+        total_credit_amount: totalCredit,
+        allocated_amount: allocated,
+        pending_amount: remaining,
+      });
+    }
+  }
+
+  return res.status(200).json({ pending, existing: existingCredits || [] });
+}
+
+/**
+ * POST /api/credit-sales/settle
+ * Body: { id, settled_amount, settlement_method, settled_date }
+ * Marks a credit sale as settled and creates corresponding deposit transaction.
+ */
+async function handleCreditSalesSettle(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  const { id, settled_amount, settlement_method, settled_date } = req.body || {};
+  if (!id) return res.status(400).json({ error: 'Credit sale ID is required' });
+  if (!settled_amount || Number(settled_amount) <= 0) return res.status(400).json({ error: 'Settled amount must be greater than 0' });
+  if (!settlement_method || !['Cash', 'Online'].includes(settlement_method)) {
+    return res.status(400).json({ error: 'Settlement method must be Cash or Online' });
+  }
+
+  // Fetch the credit sale
+  const { data: creditSale, error: fetchErr } = await supabase
+    .from('credit_sales')
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (fetchErr || !creditSale) return res.status(404).json({ error: 'Credit sale not found' });
+
+  const amount = Number(settled_amount);
+  const currentSettled = Number(creditSale.settled_amount || 0);
+  const totalAmount = Number(creditSale.amount || 0);
+  const newTotalSettled = currentSettled + amount;
+
+  if (newTotalSettled > totalAmount + 0.01) {
+    return res.status(400).json({ error: `Settled amount (${newTotalSettled}) exceeds total amount (${totalAmount})` });
+  }
+
+  // Determine new status
+  let newStatus = 'Pending';
+  if (newTotalSettled >= totalAmount - 0.01) newStatus = 'Settled';
+  else if (newTotalSettled > 0) newStatus = 'Partial';
+
+  // Update credit_sales record
+  const { error: updateErr } = await supabase
+    .from('credit_sales')
+    .update({
+      settled_amount: newTotalSettled,
+      settled_date: settled_date || new Date().toISOString().slice(0, 10),
+      settlement_method,
+      status: newStatus,
+    })
+    .eq('id', id);
+  if (updateErr) throw updateErr;
+
+  // Create a corresponding deposit in finance_transactions
+  const depositCategory = settlement_method === 'Online' ? 'Online' : 'Cash';
+  const depositSubCategory = settlement_method === 'Online' ? 'Others' : 'Cash';
+  const { error: finErr } = await supabase
+    .from('finance_transactions')
+    .insert([{
+      txn_date: settled_date || new Date().toISOString().slice(0, 10),
+      txn_type: 'Deposit',
+      category: depositCategory,
+      sub_category: depositSubCategory,
+      amount,
+      reference: `Credit settlement - ${creditSale.customer_name}`,
+      remarks: `Settled from credit sale #${id}`,
+    }]);
+  if (finErr) {
+    // Rollback credit sale update
+    await supabase.from('credit_sales').update({
+      settled_amount: currentSettled,
+      status: currentSettled > 0 ? 'Partial' : 'Pending',
+    }).eq('id', id);
+    throw finErr;
+  }
+
+  return res.status(200).json({ ok: true, status: newStatus, settled_amount: newTotalSettled });
+}
+
+/**
+ * GET /api/finance/summary?date_from=&date_to=
+ * Returns date-wise summary: total sales, deposits, expenses, shortage.
+ */
+async function handleFinanceSummary(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  const params = new URL(req.url, 'http://localhost').searchParams;
+  const dateFrom = params.get('date_from') || '';
+  const dateTo = params.get('date_to') || '';
+
+  // 1. Fetch daily sales entries for total sales
+  let salesQuery = supabase
+    .from('daily_sales_entries')
+    .select('sale_date, total_sales_amount, cash_amount, online_amount, credit_amount');
+  if (dateFrom) salesQuery = salesQuery.gte('sale_date', dateFrom);
+  if (dateTo) salesQuery = salesQuery.lte('sale_date', dateTo);
+  const { data: salesEntries, error: salesErr } = await salesQuery;
+  if (salesErr) throw salesErr;
+
+  // 2. Fetch finance transactions
+  let txnQuery = supabase
+    .from('finance_transactions')
+    .select('txn_date, txn_type, category, sub_category, amount, remarks');
+  if (dateFrom) txnQuery = txnQuery.gte('txn_date', dateFrom);
+  if (dateTo) txnQuery = txnQuery.lte('txn_date', dateTo);
+  const { data: txns, error: txnErr } = await txnQuery;
+  if (txnErr) throw txnErr;
+
+  // 3. Group by date
+  const dateMap = new Map();
+
+  // Seed with sales data
+  for (const entry of salesEntries || []) {
+    const d = entry.sale_date;
+    if (!dateMap.has(d)) dateMap.set(d, { date: d, total_sales: 0, cash_sales: 0, online_sales: 0, credit_sales: 0, deposits: 0, deposit_detail: {}, expenses: 0, expense_detail: {}, shortage: 0 });
+    const bucket = dateMap.get(d);
+    bucket.total_sales += Number(entry.total_sales_amount || 0);
+    bucket.cash_sales += Number(entry.cash_amount || 0);
+    bucket.online_sales += Number(entry.online_amount || 0);
+    bucket.credit_sales += Number(entry.credit_amount || 0);
+  }
+
+  // Add transaction data
+  for (const txn of txns || []) {
+    const d = txn.txn_date;
+    if (!dateMap.has(d)) dateMap.set(d, { date: d, total_sales: 0, cash_sales: 0, online_sales: 0, credit_sales: 0, deposits: 0, deposit_detail: {}, expenses: 0, expense_detail: {}, shortage: 0 });
+    const bucket = dateMap.get(d);
+    if (txn.txn_type === 'Deposit') {
+      bucket.deposits += Number(txn.amount || 0);
+      const key = txn.sub_category || txn.category || 'Other';
+      bucket.deposit_detail[key] = (bucket.deposit_detail[key] || 0) + Number(txn.amount || 0);
+    } else if (txn.txn_type === 'Expense') {
+      bucket.expenses += Number(txn.amount || 0);
+      const key = txn.sub_category || txn.category || 'Other';
+      bucket.expense_detail[key] = (bucket.expense_detail[key] || 0) + Number(txn.amount || 0);
+    }
+  }
+
+  // Compute shortage per date
+  for (const [, bucket] of dateMap) {
+    const totalInflow = bucket.cash_sales + bucket.online_sales;
+    bucket.shortage = Math.round((totalInflow - bucket.deposits) * 100) / 100;
+  }
+
+  const summary = [...dateMap.values()].sort((a, b) => a.date > b.date ? -1 : 1);
+
+  return res.status(200).json(summary);
+}
+
+/**
+ * GET /api/finance/ledger?date_from=&date_to=
+ * Returns ledger: opening + deposits - expenses = closing, computed cumulatively.
+ */
+async function handleFinanceLedger(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  const params = new URL(req.url, 'http://localhost').searchParams;
+  const dateFrom = params.get('date_from') || '';
+  const dateTo = params.get('date_to') || '';
+
+  // Fetch ALL finance transactions (sorted by date ascending for cumulative calc)
+  let txnQuery = supabase
+    .from('finance_transactions')
+    .select('txn_date, txn_type, category, sub_category, amount, remarks')
+    .order('txn_date', { ascending: true })
+    .order('id', { ascending: true });
+  if (dateFrom) txnQuery = txnQuery.gte('txn_date', dateFrom);
+  if (dateTo) txnQuery = txnQuery.lte('txn_date', dateTo);
+  const { data: txns, error: txnErr } = await txnQuery;
+  if (txnErr) throw txnErr;
+
+  // If dateFrom is specified, compute opening balance from all prior transactions
+  let openingBalance = 0;
+  if (dateFrom) {
+    const { data: priorTxns, error: priorErr } = await supabase
+      .from('finance_transactions')
+      .select('txn_type, amount')
+      .lt('txn_date', dateFrom);
+    if (priorErr) throw priorErr;
+    for (const t of priorTxns || []) {
+      if (t.txn_type === 'Deposit') openingBalance += Number(t.amount || 0);
+      else if (t.txn_type === 'Expense') openingBalance -= Number(t.amount || 0);
+    }
+  }
+
+  // Group by date
+  const dateMap = new Map();
+  for (const txn of txns || []) {
+    const d = txn.txn_date;
+    if (!dateMap.has(d)) dateMap.set(d, { date: d, deposits: 0, expenses: 0, deposit_detail: {}, expense_detail: {} });
+    const bucket = dateMap.get(d);
+    if (txn.txn_type === 'Deposit') {
+      bucket.deposits += Number(txn.amount || 0);
+      const key = txn.sub_category || txn.category || 'Other';
+      bucket.deposit_detail[key] = (bucket.deposit_detail[key] || 0) + Number(txn.amount || 0);
+    } else if (txn.txn_type === 'Expense') {
+      bucket.expenses += Number(txn.amount || 0);
+      const key = txn.sub_category || txn.category || 'Other';
+      bucket.expense_detail[key] = (bucket.expense_detail[key] || 0) + Number(txn.amount || 0);
+    }
+  }
+
+  // Build ledger entries with running balance
+  let running = openingBalance;
+  const ledger = [];
+  for (const [, bucket] of dateMap) {
+    const opening = running;
+    const closing = opening + bucket.deposits - bucket.expenses;
+    running = closing;
+    ledger.push({
+      date: bucket.date,
+      opening_balance: Math.round(opening * 100) / 100,
+      deposits: Math.round(bucket.deposits * 100) / 100,
+      expenses: Math.round(bucket.expenses * 100) / 100,
+      closing_balance: Math.round(closing * 100) / 100,
+      deposit_detail: bucket.deposit_detail,
+      expense_detail: bucket.expense_detail,
+    });
+  }
+
+  // If no data in range but we have an opening, show one row
+  if (ledger.length === 0 && dateFrom) {
+    ledger.push({
+      date: dateFrom,
+      opening_balance: Math.round(openingBalance * 100) / 100,
+      deposits: 0,
+      expenses: 0,
+      closing_balance: Math.round(openingBalance * 100) / 100,
+      deposit_detail: {},
+      expense_detail: {},
+    });
+  }
+
+  return res.status(200).json({ opening_balance: Math.round(openingBalance * 100) / 100, ledger: ledger.reverse() });
 }

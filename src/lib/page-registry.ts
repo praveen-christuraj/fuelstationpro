@@ -42,6 +42,8 @@ export const PAGE_REGISTRY: PageEntry[] = [
   { key: 'reports_daily_sales',     label: 'Daily Sales Report',       path: '/reports/daily-sales',         group: 'Reports',      icon: 'ClipboardList' },
   { key: 'reports_tanker_unloading',label: 'Tanker Unloading Report',  path: '/reports/tanker-unloading',    group: 'Reports',      icon: 'Truck' },
   { key: 'reports_price_history',   label: 'Price History Report',     path: '/reports/price-history',       group: 'Reports',      icon: 'TrendingUp' },
+  { key: 'reports_finance',          label: 'Finance Report',           path: '/reports/finance',             group: 'Reports',      icon: 'Wallet' },
+  { key: 'reports_credit_sales',     label: 'Credit Sales Report',      path: '/reports/credit-sales',        group: 'Reports',      icon: 'CreditCard' },
 
   // ── Bulk Upload ──
   { key: 'bulk_daily_sales',        label: 'Daily Sales Upload',       path: '/bulk/daily-sales',            group: 'Bulk Upload',  icon: 'Upload' },

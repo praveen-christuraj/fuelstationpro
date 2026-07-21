@@ -235,14 +235,24 @@ CREATE TABLE IF NOT EXISTS sales (
 CREATE TABLE IF NOT EXISTS credit_sales (
   id bigint primary key generated always as identity,
   sale_date date not null,
+  daily_sales_entry_id bigint references daily_sales_entries(id),
   customer_name text not null,
-  product_name text not null,
+  product_name text,
   volume numeric(12,2),
   amount numeric(12,2) not null,
   vehicle_no text,
   status text default 'Pending',
+  settled_amount numeric(14,2) default 0,
+  settled_date date,
+  settlement_method text,
+  remarks text,
   created_at timestamptz default now()
 );
+ALTER TABLE credit_sales ADD COLUMN IF NOT EXISTS daily_sales_entry_id bigint references daily_sales_entries(id);
+ALTER TABLE credit_sales ADD COLUMN IF NOT EXISTS settled_amount numeric(14,2) default 0;
+ALTER TABLE credit_sales ADD COLUMN IF NOT EXISTS settled_date date;
+ALTER TABLE credit_sales ADD COLUMN IF NOT EXISTS settlement_method text;
+ALTER TABLE credit_sales ADD COLUMN IF NOT EXISTS remarks text;
 
 -- 16. finance_transactions
 CREATE TABLE IF NOT EXISTS finance_transactions (
@@ -250,11 +260,21 @@ CREATE TABLE IF NOT EXISTS finance_transactions (
   txn_date date not null,
   txn_type text not null,
   category text,
+  sub_category text,
   bank_account text,
   amount numeric(14,2) not null,
   reference text,
+  remarks text,
   created_at timestamptz default now()
 );
+ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS sub_category text;
+ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS remarks text;
+
+-- Indexes for finance queries
+CREATE INDEX IF NOT EXISTS idx_credit_sales_date ON credit_sales (sale_date desc);
+CREATE INDEX IF NOT EXISTS idx_credit_sales_status ON credit_sales (status);
+CREATE INDEX IF NOT EXISTS idx_finance_transactions_date ON finance_transactions (txn_date desc);
+CREATE INDEX IF NOT EXISTS idx_finance_transactions_type ON finance_transactions (txn_type);
 
 -- 17. tanker_unloading_headers
 CREATE TABLE IF NOT EXISTS tanker_unloading_headers (

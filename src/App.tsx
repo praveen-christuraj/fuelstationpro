@@ -26,6 +26,8 @@ import Reports from './pages/Reports';
 import TankerUnloadingReport from './pages/TankerUnloadingReport';
 import DailySalesReport from './pages/DailySalesReport';
 import PriceHistoryReport from './pages/PriceHistoryReport';
+import FinanceReport from './pages/finance/FinanceReport';
+import CreditSalesReport from './pages/finance/CreditSalesReport';
 import TankDataUpload from './pages/bulk/TankDataUpload';
 import InventoryUpload from './pages/bulk/InventoryUpload';
 import DailySalesUpload from './pages/bulk/DailySalesUpload';
@@ -72,6 +74,8 @@ export default function App() {
           <Route path="/reports/daily-sales" element={<P><DailySalesReport /></P>} />
           <Route path="/reports/tanker-unloading" element={<P><TankerUnloadingReport /></P>} />
           <Route path="/reports/price-history" element={<P><PriceHistoryReport /></P>} />
+          <Route path="/reports/finance" element={<P><FinanceReport /></P>} />
+          <Route path="/reports/credit-sales" element={<P><CreditSalesReport /></P>} />
           <Route path="/bulk/tank-data" element={<P><TankDataUpload /></P>} />
           <Route path="/bulk/inventory" element={<P><InventoryUpload /></P>} />
           <Route path="/bulk/daily-sales" element={<P><DailySalesUpload /></P>} />
