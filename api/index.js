@@ -161,8 +161,7 @@ const FIELD_VALIDATIONS = {
   credit_sales: {
     sale_date: (v) => v != null && String(v).trim() !== '' || 'Sale date is required',
     customer_name: (v) => v != null && String(v).trim() !== '' || 'Customer name is required',
-    volume: (v) => v != null && v !== '' && Number(v) > 0 || 'Volume must be greater than 0',
-    amount: (v) => v != null && v !== '' && Number(v) >= 0 || 'Amount must be 0 or greater',
+    amount: (v) => v != null && v !== '' && Number(v) > 0 || 'Amount must be greater than 0',
   },
   finance_transactions: {
     txn_date: (v) => v != null && String(v).trim() !== '' || 'Transaction date is required',
