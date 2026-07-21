@@ -1,22 +1,29 @@
 import { useEffect, useState } from 'react';
-import { Wallet, ArrowUpRight, ArrowDownRight, TrendingDown, BookOpen, Plus } from 'lucide-react';
+import { Wallet, ArrowUpRight, ArrowDownRight, BookOpen, Plus } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
-import { Field, Input, Select } from '../../components/ui/Field';
+import { Field, Input } from '../../components/ui/Field';
 import { apiGet, apiPost, fmtMoney, fmtDate } from '../../lib/api';
 
-const EXPENSE_CATEGORIES = [
-  { value: 'Regular Expense', label: 'Regular Expense' },
-  { value: 'Additional Expense', label: 'Additional Expense' },
-  { value: 'Advances', label: 'Advances' },
-  { value: 'Dues', label: 'Dues' },
-  { value: 'Negative Sales', label: 'Negative Sales' },
-  { value: 'Return to Tank', label: 'Return to Tank' },
-  { value: 'Others', label: 'Others' },
+const DEPOSIT_ROWS = [
+  { category: 'Online', sub_category: 'Paytm' },
+  { category: 'Online', sub_category: 'DTA' },
+  { category: 'Online', sub_category: 'HP Pay' },
+  { category: 'Online', sub_category: 'OTP' },
+  { category: 'Online', sub_category: 'Personal Account' },
+  { category: 'Online', sub_category: 'Others' },
+  { category: 'Cash', sub_category: 'Cash' },
+  { category: 'Cash', sub_category: 'Coins' },
+  { category: 'Cash', sub_category: 'Others' },
 ];
 
-const DEPOSIT_CATEGORIES = [
-  { value: 'Online', label: 'Online', sub: ['Paytm', 'DTA', 'HP Pay', 'OTP', 'Personal Account', 'Others'] },
-  { value: 'Cash', label: 'Cash', sub: ['Cash', 'Coins', 'Others'] },
+const EXPENSE_ROWS = [
+  { category: 'Regular Expense', sub_category: 'Regular Expense' },
+  { category: 'Additional Expense', sub_category: 'Additional Expense' },
+  { category: 'Advances', sub_category: 'Advances' },
+  { category: 'Dues', sub_category: 'Dues' },
+  { category: 'Negative Sales', sub_category: 'Negative Sales' },
+  { category: 'Return to Tank', sub_category: 'Return to Tank' },
+  { category: 'Others', sub_category: 'Others' },
 ];
 
 export default function Finance() {
@@ -25,19 +32,17 @@ export default function Finance() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Filters
   const [filterDate, setFilterDate] = useState(new Date().toISOString().slice(0, 10));
 
-  // Transaction forms
-  const [showExpense, setShowExpense] = useState(false);
+  // Multi-row forms
   const [showDeposit, setShowDeposit] = useState(false);
-  const [txForm, setTxForm] = useState({
-    txn_date: new Date().toISOString().slice(0, 10),
-    category: '',
-    sub_category: '',
-    amount: '',
-    remarks: '',
-  });
+  const [showExpense, setShowExpense] = useState(false);
+  const [depositDate, setDepositDate] = useState(new Date().toISOString().slice(0, 10));
+  const [expenseDate, setExpenseDate] = useState(new Date().toISOString().slice(0, 10));
+  const [depositRows, setDepositRows] = useState<Record<string, string>>({});
+  const [expenseRows, setExpenseRows] = useState<Record<string, string>>({});
+  const [depositRemarks, setDepositRemarks] = useState('');
+  const [expenseRemarks, setExpenseRemarks] = useState('');
   const [txErr, setTxErr] = useState('');
   const [txSaving, setTxSaving] = useState(false);
 
@@ -61,35 +66,65 @@ export default function Finance() {
   useEffect(() => { load(); }, [filterDate]);
 
   const todayData = summary[0] || { total_sales: 0, cash_sales: 0, online_sales: 0, credit_sales: 0, deposits: 0, deposit_detail: {}, expenses: 0, expense_detail: {}, shortage: 0 };
-  const ledgerEntry = ledger[0] || { opening_balance: 0, deposits: 0, expenses: 0, closing_balance: 0 };
-
-  // Transaction save
-  const openExpense = () => {
-    setTxForm({ txn_date: filterDate, category: '', sub_category: '', amount: '', remarks: '' });
-    setTxErr('');
-    setShowExpense(true);
-  };
 
   const openDeposit = () => {
-    setTxForm({ txn_date: filterDate, category: '', sub_category: '', amount: '', remarks: '' });
+    setDepositDate(filterDate);
+    setDepositRows({});
+    setDepositRemarks('');
     setTxErr('');
     setShowDeposit(true);
   };
 
-  const saveExpense = async () => {
+  const openExpense = () => {
+    setExpenseDate(filterDate);
+    setExpenseRows({});
+    setExpenseRemarks('');
     setTxErr('');
-    if (!txForm.category) { setTxErr('Category is required'); return; }
-    if (!txForm.amount || Number(txForm.amount) <= 0) { setTxErr('Amount must be > 0'); return; }
-    if (!txForm.remarks.trim()) { setTxErr('Remarks are required'); return; }
+    setShowExpense(true);
+  };
+
+  const saveDeposit = async () => {
+    setTxErr('');
+    if (!depositRemarks.trim()) { setTxErr('Remarks are required for the deposit entry'); return; }
+    const filled = DEPOSIT_ROWS.filter((r) => depositRows[r.sub_category] && Number(depositRows[r.sub_category]) > 0);
+    if (filled.length === 0) { setTxErr('Enter at least one deposit amount'); return; }
     setTxSaving(true);
     try {
-      await apiPost('/api/finance', {
-        txn_date: txForm.txn_date,
-        txn_type: 'Expense',
-        category: txForm.category,
-        sub_category: txForm.sub_category || txForm.category,
-        amount: Number(txForm.amount),
-        remarks: txForm.remarks.trim(),
+      await apiPost('/api/finance/bulk', {
+        transactions: filled.map((r) => ({
+          txn_date: depositDate,
+          txn_type: 'Deposit',
+          category: r.category,
+          sub_category: r.sub_category,
+          amount: Number(depositRows[r.sub_category]),
+          remarks: depositRemarks.trim(),
+        })),
+      });
+      setShowDeposit(false);
+      await load();
+    } catch (e: any) {
+      setTxErr(e.message || 'Failed');
+    } finally {
+      setTxSaving(false);
+    }
+  };
+
+  const saveExpense = async () => {
+    setTxErr('');
+    if (!expenseRemarks.trim()) { setTxErr('Remarks are required for the expense entry'); return; }
+    const filled = EXPENSE_ROWS.filter((r) => expenseRows[r.sub_category] && Number(expenseRows[r.sub_category]) > 0);
+    if (filled.length === 0) { setTxErr('Enter at least one expense amount'); return; }
+    setTxSaving(true);
+    try {
+      await apiPost('/api/finance/bulk', {
+        transactions: filled.map((r) => ({
+          txn_date: expenseDate,
+          txn_type: 'Expense',
+          category: r.category,
+          sub_category: r.sub_category,
+          amount: Number(expenseRows[r.sub_category]),
+          remarks: expenseRemarks.trim(),
+        })),
       });
       setShowExpense(false);
       await load();
@@ -100,30 +135,8 @@ export default function Finance() {
     }
   };
 
-  const saveDeposit = async () => {
-    setTxErr('');
-    if (!txForm.category) { setTxErr('Deposit type is required'); return; }
-    if (!txForm.sub_category) { setTxErr('Sub-category is required'); return; }
-    if (!txForm.amount || Number(txForm.amount) <= 0) { setTxErr('Amount must be > 0'); return; }
-    if (!txForm.remarks.trim()) { setTxErr('Remarks are required'); return; }
-    setTxSaving(true);
-    try {
-      await apiPost('/api/finance', {
-        txn_date: txForm.txn_date,
-        txn_type: 'Deposit',
-        category: txForm.category,
-        sub_category: txForm.sub_category,
-        amount: Number(txForm.amount),
-        remarks: txForm.remarks.trim(),
-      });
-      setShowDeposit(false);
-      await load();
-    } catch (e: any) {
-      setTxErr(e.message || 'Failed');
-    } finally {
-      setTxSaving(false);
-    }
-  };
+  const depositTotal = DEPOSIT_ROWS.reduce((s, r) => s + (Number(depositRows[r.sub_category]) || 0), 0);
+  const expenseTotal = EXPENSE_ROWS.reduce((s, r) => s + (Number(expenseRows[r.sub_category]) || 0), 0);
 
   return (
     <div className="space-y-4">
@@ -182,7 +195,7 @@ export default function Finance() {
               <div className={`text-xl font-bold mt-1 ${todayData.shortage > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                 {todayData.shortage > 0 ? '+' : ''}{fmtMoney(todayData.shortage)}
               </div>
-              <p className="text-[10px] text-slate-400 mt-1">Inflow − Deposits</p>
+              <p className="text-[10px] text-slate-400 mt-1">Inflow - Deposits</p>
             </Card>
           </div>
 
@@ -221,84 +234,100 @@ export default function Finance() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Card className="p-5">
               <h3 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2"><ArrowDownRight className="w-4 h-4 text-rose-600" /> Record Expense</h3>
-              <p className="text-xs text-slate-500 mb-3">Log an expense for this date</p>
+              <p className="text-xs text-slate-500 mb-3">Log all expense splits for this date in one go</p>
               <button onClick={openExpense} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700"><Plus className="w-4 h-4" /> Add Expense</button>
             </Card>
             <Card className="p-5">
               <h3 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2"><ArrowUpRight className="w-4 h-4 text-emerald-600" /> Record Deposit</h3>
-              <p className="text-xs text-slate-500 mb-3">Log a cash or online deposit for this date</p>
+              <p className="text-xs text-slate-500 mb-3">Log all deposit splits (online + cash) for this date</p>
               <button onClick={openDeposit} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700"><Plus className="w-4 h-4" /> Add Deposit</button>
             </Card>
           </div>
         </>
       )}
 
-      {/* Expense modal */}
-      {showExpense && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowExpense(false)}>
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md space-y-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-slate-800">Record Expense</h3>
+      {/* ── Deposit multi-row modal ── */}
+      {showDeposit && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowDeposit(false)}>
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-slate-800">Record Deposits</h3>
             <Field label="Date" required>
-              <Input type="date" value={txForm.txn_date} onChange={(e) => setTxForm({ ...txForm, txn_date: e.target.value })} />
+              <Input type="date" value={depositDate} onChange={(e) => setDepositDate(e.target.value)} />
             </Field>
-            <Field label="Category" required>
-              <Select value={txForm.category} onChange={(e) => setTxForm({ ...txForm, category: e.target.value, sub_category: '' })}>
-                <option value="">Select category...</option>
-                {EXPENSE_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </Select>
-            </Field>
-            <Field label="Sub-Category">
-              <Input value={txForm.sub_category} onChange={(e) => setTxForm({ ...txForm, sub_category: e.target.value })} placeholder="Optional sub-category" />
-            </Field>
-            <Field label="Amount" required>
-              <Input type="number" step="0.01" value={txForm.amount} onChange={(e) => setTxForm({ ...txForm, amount: e.target.value })} />
-            </Field>
+
+            {/* Online sub-categories */}
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Online</p>
+              <div className="space-y-2">
+                {DEPOSIT_ROWS.filter((r) => r.category === 'Online').map((r) => (
+                  <div key={r.sub_category} className="flex items-center gap-3">
+                    <span className="text-sm text-slate-700 w-36">{r.sub_category}</span>
+                    <input type="number" step="0.01" min="0" className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm" value={depositRows[r.sub_category] || ''} onChange={(e) => setDepositRows({ ...depositRows, [r.sub_category]: e.target.value })} placeholder="0" />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Cash sub-categories */}
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Cash</p>
+              <div className="space-y-2">
+                {DEPOSIT_ROWS.filter((r) => r.category === 'Cash').map((r) => (
+                  <div key={r.sub_category} className="flex items-center gap-3">
+                    <span className="text-sm text-slate-700 w-36">{r.sub_category}</span>
+                    <input type="number" step="0.01" min="0" className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm" value={depositRows[r.sub_category] || ''} onChange={(e) => setDepositRows({ ...depositRows, [r.sub_category]: e.target.value })} placeholder="0" />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-slate-100 pt-3">
+              <span className="text-sm font-semibold text-slate-700">Total: <span className="text-emerald-600">{fmtMoney(depositTotal)}</span></span>
+            </div>
+
             <Field label="Remarks" required>
-              <Input value={txForm.remarks} onChange={(e) => setTxForm({ ...txForm, remarks: e.target.value })} placeholder="Required" />
+              <Input value={depositRemarks} onChange={(e) => setDepositRemarks(e.target.value)} placeholder="e.g. End of day deposit" />
             </Field>
+
             {txErr && <p className="text-sm text-rose-600">{txErr}</p>}
             <div className="flex justify-end gap-2">
-              <button onClick={() => setShowExpense(false)} className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">Cancel</button>
-              <button onClick={saveExpense} disabled={txSaving} className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-60">{txSaving ? 'Saving...' : 'Save Expense'}</button>
+              <button onClick={() => setShowDeposit(false)} className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">Cancel</button>
+              <button onClick={saveDeposit} disabled={txSaving} className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60">{txSaving ? 'Saving...' : 'Save Deposits'}</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Deposit modal */}
-      {showDeposit && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowDeposit(false)}>
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md space-y-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-slate-800">Record Deposit</h3>
+      {/* ── Expense multi-row modal ── */}
+      {showExpense && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowExpense(false)}>
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-slate-800">Record Expenses</h3>
             <Field label="Date" required>
-              <Input type="date" value={txForm.txn_date} onChange={(e) => setTxForm({ ...txForm, txn_date: e.target.value })} />
+              <Input type="date" value={expenseDate} onChange={(e) => setExpenseDate(e.target.value)} />
             </Field>
-            <Field label="Deposit Type" required>
-              <Select value={txForm.category} onChange={(e) => setTxForm({ ...txForm, category: e.target.value, sub_category: '' })}>
-                <option value="">Select type...</option>
-                {DEPOSIT_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </Select>
-            </Field>
-            {txForm.category && (
-              <Field label="Sub-Category" required>
-                <Select value={txForm.sub_category} onChange={(e) => setTxForm({ ...txForm, sub_category: e.target.value })}>
-                  <option value="">Select...</option>
-                  {DEPOSIT_CATEGORIES.find((c) => c.value === txForm.category)?.sub.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </Select>
-              </Field>
-            )}
-            <Field label="Amount" required>
-              <Input type="number" step="0.01" value={txForm.amount} onChange={(e) => setTxForm({ ...txForm, amount: e.target.value })} />
-            </Field>
+
+            <div className="space-y-2">
+              {EXPENSE_ROWS.map((r) => (
+                <div key={r.sub_category} className="flex items-center gap-3">
+                  <span className="text-sm text-slate-700 w-36">{r.category}</span>
+                  <input type="number" step="0.01" min="0" className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm" value={expenseRows[r.sub_category] || ''} onChange={(e) => setExpenseRows({ ...expenseRows, [r.sub_category]: e.target.value })} placeholder="0" />
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between border-t border-slate-100 pt-3">
+              <span className="text-sm font-semibold text-slate-700">Total: <span className="text-rose-600">{fmtMoney(expenseTotal)}</span></span>
+            </div>
+
             <Field label="Remarks" required>
-              <Input value={txForm.remarks} onChange={(e) => setTxForm({ ...txForm, remarks: e.target.value })} placeholder="Required" />
+              <Input value={expenseRemarks} onChange={(e) => setExpenseRemarks(e.target.value)} placeholder="e.g. Daily running expenses" />
             </Field>
+
             {txErr && <p className="text-sm text-rose-600">{txErr}</p>}
             <div className="flex justify-end gap-2">
-              <button onClick={() => setShowDeposit(false)} className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">Cancel</button>
-              <button onClick={saveDeposit} disabled={txSaving} className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60">{txSaving ? 'Saving...' : 'Save Deposit'}</button>
+              <button onClick={() => setShowExpense(false)} className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">Cancel</button>
+              <button onClick={saveExpense} disabled={txSaving} className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-60">{txSaving ? 'Saving...' : 'Save Expenses'}</button>
             </div>
           </div>
         </div>

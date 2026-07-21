@@ -333,7 +333,7 @@ export default function CreditSales() {
                 <option value="Online">Online</option>
               </Select>
             </Field>
-            <p className="text-xs text-slate-500">Settled amount will be added as a deposit in Finance Management.</p>
+            <p className="text-xs text-slate-500">Settlement is for record tracking only and does not affect Finance Management.</p>
             {settleErr && <p className="text-sm text-rose-600">{settleErr}</p>}
             <div className="flex justify-end gap-2">
               <button onClick={() => setShowSettle(false)} className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">Cancel</button>

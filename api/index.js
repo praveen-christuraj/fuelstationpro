@@ -374,11 +374,17 @@ export default async function handler(req, res) {
     if (parts[0] === 'credit-sales' && parts[1] === 'settle' && req.method === 'POST') {
       return await handleCreditSalesSettle(req, res);
     }
+    if (parts[0] === 'credit-sales' && parts[1] === 'report' && req.method === 'GET') {
+      return await handleCreditSalesReport(req, res);
+    }
     if (parts[0] === 'finance' && parts[1] === 'summary' && req.method === 'GET') {
       return await handleFinanceSummary(req, res);
     }
     if (parts[0] === 'finance' && parts[1] === 'ledger' && req.method === 'GET') {
       return await handleFinanceLedger(req, res);
+    }
+    if (parts[0] === 'finance' && parts[1] === 'bulk' && req.method === 'POST') {
+      return await handleFinanceBulk(req, res);
     }
 
     const dbTable = resolveTable(parts[0]);
@@ -3448,7 +3454,7 @@ async function handleCreditSalesSettle(req, res) {
   if (newTotalSettled >= totalAmount - 0.01) newStatus = 'Settled';
   else if (newTotalSettled > 0) newStatus = 'Partial';
 
-  // Update credit_sales record
+  // Update credit_sales record only — no finance_transactions side-effect
   const { error: updateErr } = await supabase
     .from('credit_sales')
     .update({
@@ -3459,29 +3465,6 @@ async function handleCreditSalesSettle(req, res) {
     })
     .eq('id', id);
   if (updateErr) throw updateErr;
-
-  // Create a corresponding deposit in finance_transactions
-  const depositCategory = settlement_method === 'Online' ? 'Online' : 'Cash';
-  const depositSubCategory = settlement_method === 'Online' ? 'Others' : 'Cash';
-  const { error: finErr } = await supabase
-    .from('finance_transactions')
-    .insert([{
-      txn_date: settled_date || new Date().toISOString().slice(0, 10),
-      txn_type: 'Deposit',
-      category: depositCategory,
-      sub_category: depositSubCategory,
-      amount,
-      reference: `Credit settlement - ${creditSale.customer_name}`,
-      remarks: `Settled from credit sale #${id}`,
-    }]);
-  if (finErr) {
-    // Rollback credit sale update
-    await supabase.from('credit_sales').update({
-      settled_amount: currentSettled,
-      status: currentSettled > 0 ? 'Partial' : 'Pending',
-    }).eq('id', id);
-    throw finErr;
-  }
 
   return res.status(200).json({ ok: true, status: newStatus, settled_amount: newTotalSettled });
 }
@@ -3639,4 +3622,75 @@ async function handleFinanceLedger(req, res) {
   }
 
   return res.status(200).json({ opening_balance: Math.round(openingBalance * 100) / 100, ledger: ledger.reverse() });
+}
+
+/**
+ * POST /api/finance/bulk
+ * Body: { transactions: [{ txn_date, txn_type, category, sub_category, amount, remarks }, ...] }
+ * Inserts multiple finance_transactions in one call.
+ */
+async function handleFinanceBulk(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  const { transactions } = req.body || {};
+  if (!Array.isArray(transactions) || transactions.length === 0) {
+    return res.status(400).json({ error: 'transactions array is required' });
+  }
+
+  // Filter out rows with empty/zero amount
+  const validRows = transactions.filter((t) => t.amount && Number(t.amount) > 0);
+  if (validRows.length === 0) {
+    return res.status(400).json({ error: 'No valid transactions (all amounts are empty or zero)' });
+  }
+
+  // Validate each row
+  for (let i = 0; i < validRows.length; i++) {
+    const t = validRows[i];
+    if (!t.txn_date) return res.status(400).json({ error: `Row ${i + 1}: date is required` });
+    if (!t.txn_type || !['Expense', 'Deposit'].includes(t.txn_type)) return res.status(400).json({ error: `Row ${i + 1}: type must be Expense or Deposit` });
+    if (!t.remarks || !String(t.remarks).trim()) return res.status(400).json({ error: `Row ${i + 1}: remarks are required` });
+  }
+
+  // Insert all valid rows
+  const rows = validRows.map((t) => ({
+    txn_date: t.txn_date,
+    txn_type: t.txn_type,
+    category: t.category || '',
+    sub_category: t.sub_category || '',
+    amount: Number(t.amount),
+    remarks: String(t.remarks).trim(),
+  }));
+
+  const { data, error } = await supabase.from('finance_transactions').insert(rows).select();
+  if (error) throw error;
+
+  return res.status(200).json({ ok: true, count: data.length, inserted: data });
+}
+
+/**
+ * GET /api/credit-sales/report?date_from=&date_to=&customer=&status=
+ * Returns all credit_sales records with filters for the report page.
+ */
+async function handleCreditSalesReport(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  const params = new URL(req.url, 'http://localhost').searchParams;
+  const dateFrom = params.get('date_from') || '';
+  const dateTo = params.get('date_to') || '';
+  const customer = params.get('customer') || '';
+  const status = params.get('status') || '';
+
+  let query = supabase
+    .from('credit_sales')
+    .select('*')
+    .order('sale_date', { ascending: false })
+    .order('id', { ascending: false });
+
+  if (dateFrom) query = query.gte('sale_date', dateFrom);
+  if (dateTo) query = query.lte('sale_date', dateTo);
+  if (customer) query = query.ilike('customer_name', `%${customer}%`);
+  if (status) query = query.eq('status', status);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  return res.status(200).json(data || []);
 }
