@@ -398,6 +398,31 @@ CREATE TABLE IF NOT EXISTS cash_deposits (
 );
 create index if not exists idx_cash_deposits_date on cash_deposits (deposit_date desc);
 
+-- 25. operator_sales_settlements — Operator sales management & close-out
+CREATE TABLE IF NOT EXISTS operator_sales_settlements (
+  id bigint primary key generated always as identity,
+  sale_date date not null,
+  shift_name text not null,
+  operator_name text not null,
+  dispenser_name text not null,
+  daily_sales_entry_id bigint references daily_sales_entries(id) on delete set null,
+  total_sales_amount numeric(14,2) default 0,
+  submitted_amount numeric(14,2) default 0,
+  variance numeric(14,2) default 0,
+  deduction_amount numeric(14,2) default 0,
+  net_payable numeric(14,2) default 0,
+  status text default 'open' check (status in ('open', 'settled')),
+  remarks text,
+  settled_at timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create index if not exists idx_operator_settlements_date on operator_sales_settlements (sale_date desc);
+create index if not exists idx_operator_settlements_operator on operator_sales_settlements (operator_name);
+create index if not exists idx_operator_settlements_status on operator_sales_settlements (status);
+create index if not exists idx_operator_settlements_shift on operator_sales_settlements (shift_name);
+create unique index if not exists uq_operator_settlement on operator_sales_settlements (sale_date, shift_name, operator_name, dispenser_name);
+
 -- ===== UNIQUE CONSTRAINTS (DO block for idempotent add) =====
 DO $$BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_name_key') THEN ALTER TABLE products ADD CONSTRAINT products_name_key UNIQUE (name); END IF;
@@ -416,7 +441,7 @@ DO $$BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bank_accounts_account_no_key') THEN ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_account_no_key UNIQUE (account_no); END IF;
 END$$;
 
--- 25. role_permissions — admin-configurable page access per role
+-- 26. role_permissions — admin-configurable page access per role
 CREATE TABLE IF NOT EXISTS role_permissions (
   id bigint primary key generated always as identity,
   role text not null check (role in ('admin', 'data_entry')),

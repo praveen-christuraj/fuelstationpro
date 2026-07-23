@@ -233,8 +233,8 @@ export default function Finance() {
           {/* Summary cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card className="p-4">
-              <div className="text-xs text-slate-400">Cash + Online Sales (Inflow)</div>
-              <div className="text-xl font-bold text-slate-800 mt-1">{fmtMoney(todayData.cash_sales + todayData.online_sales)}</div>
+              <div className="text-xs text-slate-400">Meter Sales (Inflow)</div>
+              <div className="text-xl font-bold text-slate-800 mt-1">{fmtMoney(todayData.total_sales)}</div>
               <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
                 <div className="text-slate-500">Cash: <span className="font-medium">{fmtMoney(todayData.cash_sales)}</span></div>
                 <div className="text-slate-500">Online: <span className="font-medium">{fmtMoney(todayData.online_sales)}</span></div>
@@ -267,7 +267,7 @@ export default function Finance() {
               <div className={`text-xl font-bold mt-1 ${todayData.shortage < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                 {todayData.shortage > 0 ? '+' : ''}{fmtMoney(todayData.shortage)}
               </div>
-              <p className="text-[10px] text-slate-400 mt-1">Inflow − (Deposits + Expenses)</p>
+              <p className="text-[10px] text-slate-400 mt-1">Meter Sales − (Deposits + Expenses)</p>
             </Card>
           </div>
 

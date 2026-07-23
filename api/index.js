@@ -12,6 +12,7 @@ const TXN_TABLES = [
   'daily_sales_entries', 'daily_sales_nozzle_readings', 'daily_sales_testing',
   'dip_readings', 'cash_deposits',
   'stock_movements', 'sales', 'credit_sales', 'finance_transactions',
+  'operator_sales_settlements',
   'price_history',
 ];
 
@@ -380,6 +381,21 @@ export default async function handler(req, res) {
     }
     if (parts[0] === 'finance' && parts[1] === 'bulk' && req.method === 'POST') {
       return await handleFinanceBulk(req, res);
+    }
+    if (parts[0] === 'operator-sales' && parts[1] === 'seed' && req.method === 'POST') {
+      return await handleOperatorSalesSeed(req, res);
+    }
+    if (parts[0] === 'operator-sales' && req.method === 'GET') {
+      return await handleOperatorSalesList(req, res);
+    }
+    if (parts[0] === 'operator-sales' && req.method === 'POST') {
+      return await handleOperatorSalesCreate(req, res);
+    }
+    if (parts[0] === 'operator-sales' && req.method === 'PUT') {
+      return await handleOperatorSalesUpdate(req, res);
+    }
+    if (parts[0] === 'operator-sales' && req.method === 'DELETE') {
+      return await handleOperatorSalesDelete(req, res);
     }
 
     const dbTable = resolveTable(parts[0]);
@@ -3523,11 +3539,10 @@ async function handleFinanceSummary(req, res) {
     }
   }
 
-  // Compute shortage per date: Inflow - (Deposits + Expenses)
-  // The client receives sales inflow, then makes expenses and deposits from it.
-  // If deposits + expenses equals inflow → balanced. Difference is shortage/surplus.
+  // Compute shortage per date: Total Meter Sales (Inflow) - (Deposits + Expenses)
+  // Inflow = total_sales_amount from meter dispatch (net of testing), NOT operator-submitted cash/online
   for (const [, bucket] of dateMap) {
-    const totalInflow = bucket.cash_sales + bucket.online_sales;
+    const totalInflow = bucket.total_sales;
     bucket.shortage = Math.round((totalInflow - (bucket.deposits + bucket.expenses)) * 100) / 100;
   }
 
@@ -3691,4 +3706,217 @@ async function handleCreditSalesReport(req, res) {
   if (error) throw error;
 
   return res.status(200).json(data || []);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Operator Sales Management — new endpoints
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/operator-sales/seed
+ * Seeds operator_sales_settlements from daily_sales_entries for a date range.
+ * Body: { date_from, date_to } (optional — if omitted, seeds all unseeded entries)
+ */
+async function handleOperatorSalesSeed(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  const { date_from, date_to } = req.body || {};
+
+  let query = supabase
+    .from('daily_sales_entries')
+    .select('id, sale_date, shift_name, operator_name, dispenser_name, cash_amount, online_amount, total_sales_amount, variance')
+    .not('operator_name', 'is', null)
+    .neq('operator_name', '')
+    .order('sale_date', { ascending: false });
+
+  if (date_from) query = query.gte('sale_date', date_from);
+  if (date_to) query = query.lte('sale_date', date_to);
+
+  const { data: entries, error: entriesErr } = await query;
+  if (entriesErr) throw entriesErr;
+
+  let inserted = 0, skipped = 0;
+  for (const entry of entries || []) {
+    const submittedAmount = Math.round((Number(entry.cash_amount || 0) + Number(entry.online_amount || 0)) * 100) / 100;
+    const { data: existing, error: existErr } = await supabase
+      .from('operator_sales_settlements')
+      .select('id')
+      .eq('sale_date', entry.sale_date)
+      .eq('shift_name', entry.shift_name)
+      .eq('operator_name', entry.operator_name)
+      .eq('dispenser_name', entry.dispenser_name)
+      .maybeSingle();
+    if (existErr) throw existErr;
+    if (existing) { skipped++; continue; }
+
+    const { error: insErr } = await supabase
+      .from('operator_sales_settlements')
+      .insert([{
+        sale_date: entry.sale_date,
+        shift_name: entry.shift_name,
+        operator_name: entry.operator_name,
+        dispenser_name: entry.dispenser_name,
+        daily_sales_entry_id: entry.id,
+        total_sales_amount: Number(entry.total_sales_amount || 0),
+        submitted_amount: submittedAmount,
+        variance: Number(entry.variance || 0),
+        deduction_amount: 0,
+        net_payable: submittedAmount,
+        status: 'open',
+      }]);
+    if (insErr) throw insErr;
+    inserted++;
+  }
+
+  return res.status(200).json({ inserted, skipped });
+}
+
+/**
+ * GET /api/operator-sales
+ * Lists operator sales settlements with filters: sale_date, operator_name, shift_name,
+ * dispenser_name, status, date_from, date_to
+ */
+async function handleOperatorSalesList(req, res) {
+  const { filters, pagination } = getFilters(req.url);
+  const { page, pageSize, search, hasPagination } = pagination;
+
+  let query = hasPagination
+    ? supabase.from('operator_sales_settlements').select('*', { count: 'exact' }).order('sale_date', { ascending: false }).order('id', { ascending: false })
+    : supabase.from('operator_sales_settlements').select('*').order('sale_date', { ascending: false }).order('id', { ascending: false });
+
+  for (const [key, value] of Object.entries(filters)) {
+    if (key === 'date_from') {
+      query = query.gte('sale_date', value);
+    } else if (key === 'date_to') {
+      query = query.lte('sale_date', value);
+    } else {
+      query = query.eq(key, value);
+    }
+  }
+
+  if (search) {
+    query = query.or(`operator_name.ilike.%${search}%,shift_name.ilike.%${search}%,dispenser_name.ilike.%${search}%`);
+  }
+
+  if (hasPagination) {
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+    query = query.range(from, to);
+    const { data, error, count } = await query;
+    if (error) throw error;
+    return res.status(200).json({ data: data || [], total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) });
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return res.status(200).json(data || []);
+}
+
+/**
+ * POST /api/operator-sales
+ * Creates one or more operator sales settlement records.
+ */
+async function handleOperatorSalesCreate(req, res) {
+  const rows = Array.isArray(req.body) ? req.body : [req.body];
+  const inserted = [];
+  for (const row of rows) {
+    const saleDate = requireText(row.sale_date, 'Sale date');
+    const shiftName = requireText(row.shift_name, 'Shift');
+    const operatorName = requireText(row.operator_name, 'Operator');
+    const dispenserName = requireText(row.dispenser_name, 'Dispenser');
+    const totalSales = requireNonNegativeNumber(row.total_sales_amount, 'Total sales amount');
+    const submitted = requireNonNegativeNumber(row.submitted_amount, 'Submitted amount');
+    const variance = Math.round((submitted - totalSales) * 100) / 100;
+    const deduction = requireNonNegativeNumber(row.deduction_amount ?? 0, 'Deduction amount');
+    const netPayable = Math.round((submitted - deduction) * 100) / 100;
+
+    // Check for duplicate
+    const { data: existing, error: existErr } = await supabase
+      .from('operator_sales_settlements')
+      .select('id')
+      .eq('sale_date', saleDate)
+      .eq('shift_name', shiftName)
+      .eq('operator_name', operatorName)
+      .eq('dispenser_name', dispenserName)
+      .maybeSingle();
+    if (existErr) throw existErr;
+    if (existing) throw new Error(`Settlement already exists for ${operatorName}, ${shiftName}, ${dispenserName} on ${saleDate}`);
+
+    const { data, error } = await supabase
+      .from('operator_sales_settlements')
+      .insert([{
+        sale_date: saleDate,
+        shift_name: shiftName,
+        operator_name: operatorName,
+        dispenser_name: dispenserName,
+        daily_sales_entry_id: row.daily_sales_entry_id || null,
+        total_sales_amount: totalSales,
+        submitted_amount: submitted,
+        variance,
+        deduction_amount: deduction,
+        net_payable: netPayable,
+        status: row.status || 'open',
+        remarks: row.remarks || null,
+      }])
+      .select()
+      .single();
+    if (error) throw error;
+    inserted.push(data);
+  }
+  return res.status(201).json(inserted.length === 1 ? inserted[0] : inserted);
+}
+
+/**
+ * PUT /api/operator-sales
+ * Updates an operator sales settlement (deduction, remarks, status, submitted_amount).
+ */
+async function handleOperatorSalesUpdate(req, res) {
+  const body = req.body || {};
+  const id = Number(body.id);
+  if (!id) return res.status(400).json({ error: 'ID is required' });
+
+  const { data: existing, error: fetchErr } = await supabase
+    .from('operator_sales_settlements')
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (fetchErr) throw fetchErr;
+
+  const updates = {};
+  if (body.total_sales_amount != null) updates.total_sales_amount = Number(body.total_sales_amount);
+  if (body.submitted_amount != null) updates.submitted_amount = Number(body.submitted_amount);
+  if (body.deduction_amount != null) updates.deduction_amount = Number(body.deduction_amount);
+  if (body.remarks !== undefined) updates.remarks = String(body.remarks).trim() || null;
+  if (body.status) {
+    if (!['open', 'settled'].includes(body.status)) throw new Error('Status must be open or settled');
+    updates.status = body.status;
+    if (body.status === 'settled') updates.settled_at = new Date().toISOString();
+  }
+
+  // Recompute derived fields
+  const totalSales = updates.total_sales_amount ?? Number(existing.total_sales_amount || 0);
+  const submitted = updates.submitted_amount ?? Number(existing.submitted_amount || 0);
+  const deduction = updates.deduction_amount ?? Number(existing.deduction_amount || 0);
+  updates.variance = Math.round((submitted - totalSales) * 100) / 100;
+  updates.net_payable = Math.round((submitted - deduction) * 100) / 100;
+
+  const { data, error } = await supabase
+    .from('operator_sales_settlements')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return res.status(200).json(data);
+}
+
+/**
+ * DELETE /api/operator-sales
+ * Deletes an operator sales settlement.
+ */
+async function handleOperatorSalesDelete(req, res) {
+  const { id } = req.body || {};
+  if (!id) return res.status(400).json({ error: 'ID is required' });
+  const { error } = await supabase.from('operator_sales_settlements').delete().eq('id', id);
+  if (error) throw error;
+  return res.status(200).json({ ok: true });
 }

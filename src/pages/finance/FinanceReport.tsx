@@ -67,7 +67,7 @@ export default function FinanceReport() {
 
   // ── Totals ──
   const totals = useMemo(() => {
-    const sales = summary.reduce((s, r) => s + (r.cash_sales + r.online_sales), 0);
+    const sales = summary.reduce((s, r) => s + r.total_sales, 0);
     const deposits = summary.reduce((s, r) => s + r.deposits, 0);
     const expenses = summary.reduce((s, r) => s + r.expenses, 0);
     const shortage = summary.reduce((s, r) => s + r.shortage, 0);
@@ -149,9 +149,9 @@ export default function FinanceReport() {
     const dailyRows = summary.map((r) => {
       const row: Record<string, any> = {
         'Date': r.date,
-        'Cash Sales': Number(r.cash_sales || 0),
-        'Online Sales': Number(r.online_sales || 0),
-        'Total Inflow': Number(r.cash_sales || 0) + Number(r.online_sales || 0),
+        'Meter Sales': Number(r.total_sales || 0),
+        'Cash Submitted': Number(r.cash_sales || 0),
+        'Online Submitted': Number(r.online_sales || 0),
         'Total Deposits': Number(r.deposits || 0),
         'Total Expenses': Number(r.expenses || 0),
         'Shortage/Surplus': Number(r.shortage || 0),
@@ -222,7 +222,7 @@ export default function FinanceReport() {
           {/* ── Summary Cards ── */}
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <Card className="p-4">
-              <div className="text-xs text-slate-400">Cash + Online Sales (Inflow)</div>
+              <div className="text-xs text-slate-400">Meter Sales (Inflow)</div>
               <div className="text-xl font-bold text-slate-800 mt-1">{fmtMoney(totals.sales)}</div>
             </Card>
             <Card className="p-4">
@@ -240,7 +240,7 @@ export default function FinanceReport() {
               <div className={`text-xl font-bold mt-1 ${totals.shortage < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                 {fmtMoney(totals.shortage)}
               </div>
-              <p className="text-[10px] text-slate-400 mt-1">Inflow − (Deposits + Expenses)</p>
+              <p className="text-[10px] text-slate-400 mt-1">Meter Sales − (Deposits + Expenses)</p>
             </Card>
           </div>
 
@@ -376,9 +376,9 @@ export default function FinanceReport() {
                 <thead className="bg-slate-50 text-slate-500 text-xs">
                   <tr>
                     <th className="px-3 py-2 text-left">Date</th>
-                    <th className="px-3 py-2 text-right">Cash Sales</th>
-                    <th className="px-3 py-2 text-right">Online Sales</th>
-                    <th className="px-3 py-2 text-right">Inflow</th>
+                    <th className="px-3 py-2 text-right">Meter Sales</th>
+                    <th className="px-3 py-2 text-right">Cash Submitted</th>
+                    <th className="px-3 py-2 text-right">Online Submitted</th>
                     <th className="px-3 py-2 text-right">Deposits</th>
                     <th className="px-3 py-2 text-right">Expenses</th>
                     <th className="px-3 py-2 text-right">Shortage</th>
@@ -388,9 +388,9 @@ export default function FinanceReport() {
                   {summary.map((r) => (
                     <tr key={r.date} className="hover:bg-slate-50">
                       <td className="px-3 py-2 font-medium">{fmtDate(r.date)}</td>
+                      <td className="px-3 py-2 text-right">{fmtMoney(r.total_sales)}</td>
                       <td className="px-3 py-2 text-right">{fmtMoney(r.cash_sales)}</td>
                       <td className="px-3 py-2 text-right">{fmtMoney(r.online_sales)}</td>
-                      <td className="px-3 py-2 text-right font-medium">{fmtMoney(r.cash_sales + r.online_sales)}</td>
                       <td className="px-3 py-2 text-right text-emerald-600">{fmtMoney(r.deposits)}</td>
                       <td className="px-3 py-2 text-right text-rose-600">{fmtMoney(r.expenses)}</td>
                       <td className={`px-3 py-2 text-right font-medium ${r.shortage < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{fmtMoney(r.shortage)}</td>

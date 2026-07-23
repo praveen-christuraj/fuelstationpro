@@ -36,6 +36,7 @@ export const PAGE_REGISTRY: PageEntry[] = [
   // ── Finance ──
   { key: 'finance_credit_sales',    label: 'Credit Sales',             path: '/finance/credit-sales',        group: 'Finance',      icon: 'ClipboardList' },
   { key: 'finance_management',      label: 'Finance Management',       path: '/finance/management',          group: 'Finance',      icon: 'Wallet' },
+  { key: 'finance_operator_sales',  label: 'Operator Sales Mgmt',      path: '/finance/operator-sales',      group: 'Finance',      icon: 'ClipboardList' },
 
   // ── Reports ──
   { key: 'reports_hub',             label: 'Report Hub',               path: '/reports',                     group: 'Reports',      icon: 'BarChart3' },

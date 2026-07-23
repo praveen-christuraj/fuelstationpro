@@ -39,6 +39,8 @@ const ALLOWED_RESOURCES = new Set([
   'finance',
   'finance-transactions',
   'finance_transactions',
+  'operator-sales',
+  'operator_sales_settlements',
   'calibration',
   'admin',
 ]);
