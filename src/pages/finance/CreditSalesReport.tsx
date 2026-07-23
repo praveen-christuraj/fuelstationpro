@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { BarChart3, Download } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import DataFilters from '../../components/ui/DataFilters';
+import Pagination from '../../components/ui/Pagination';
 import { BarChart, DonutChart } from '../../components/Charts';
 import { apiGet, fmtMoney, fmtDate } from '../../lib/api';
 import { Badge } from '../../components/ui/Badge';
@@ -101,6 +102,17 @@ export default function CreditSalesReport() {
 
   const statusColor = (s: string) => s === 'Settled' ? 'green' : s === 'Partial' ? 'amber' : 'red';
 
+  // Pagination (date-wise credits table)
+  const [creditPage, setCreditPage] = useState(1);
+  const [creditPageSize, setCreditPageSize] = useState(20);
+  const creditTotalPages = Math.max(1, Math.ceil(credits.length / creditPageSize));
+  const paginatedCredits = useMemo(() => {
+    const from = (creditPage - 1) * creditPageSize;
+    return credits.slice(from, from + creditPageSize);
+  }, [credits, creditPage, creditPageSize]);
+  const handleCreditPageChange = (page: number) => setCreditPage(page);
+  const handleCreditPageSizeChange = (size: number) => { setCreditPageSize(size); setCreditPage(1); };
+
   const handleExport = (fmt: 'xlsx' | 'csv') => {
     const rows = credits.map((c) => ({
       'Date': c.sale_date,
@@ -183,7 +195,9 @@ export default function CreditSalesReport() {
           {/* Date-wise view */}
           {viewMode === 'date' && (
             <Card className="p-5">
-              <h3 className="text-sm font-semibold text-slate-800 mb-3">All Credit Sales (Date-wise)</h3>
+              <h3 className="text-sm font-semibold text-slate-800 mb-3">
+                All Credit Sales (Date-wise) {credits.length > 0 && <span className="text-slate-400 font-normal">({credits.length})</span>}
+              </h3>
               <div className="overflow-x-auto rounded-lg border border-slate-200">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 text-slate-500 text-xs">
@@ -202,7 +216,7 @@ export default function CreditSalesReport() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
-                    {credits.map((c) => (
+                    {paginatedCredits.map((c) => (
                       <tr key={c.id} className="hover:bg-slate-50">
                         <td className="px-3 py-2">{fmtDate(c.sale_date)}</td>
                         <td className="px-3 py-2 font-medium">{c.customer_name}</td>
@@ -221,6 +235,16 @@ export default function CreditSalesReport() {
                   </tbody>
                 </table>
               </div>
+              {credits.length > 0 && (
+                <Pagination
+                  currentPage={creditPage}
+                  totalPages={creditTotalPages}
+                  totalItems={credits.length}
+                  pageSize={creditPageSize}
+                  onPageChange={handleCreditPageChange}
+                  onPageSizeChange={handleCreditPageSizeChange}
+                />
+              )}
             </Card>
           )}
 

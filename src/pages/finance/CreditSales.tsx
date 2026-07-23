@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { CreditCard, CheckCircle2, Clock, AlertTriangle, Pencil, Trash2 } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import { Field, Input, Select } from '../../components/ui/Field';
 import { Badge } from '../../components/ui/Badge';
 import { ConfirmModal } from '../../components/ui/Modal';
+import Pagination from '../../components/ui/Pagination';
 import { apiGet, apiPost, apiPut, apiDelete, fmtMoney, fmtDate } from '../../lib/api';
 
 type PendingRow = {
@@ -69,6 +70,10 @@ export default function CreditSales() {
   });
   const [editErr, setEditErr] = useState('');
   const [editSaving, setEditSaving] = useState(false);
+
+  // Pagination (credit sale records)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   // Delete
   const [deleteTarget, setDeleteTarget] = useState<ExistingCredit | null>(null);
@@ -241,6 +246,16 @@ export default function CreditSales() {
 
   const statusColor = (s: string) => s === 'Settled' ? 'green' : s === 'Partial' ? 'amber' : 'red';
 
+  // Paginated existing credit records
+  const existingTotalPages = Math.max(1, Math.ceil(existing.length / pageSize));
+  const paginatedExisting = useMemo(() => {
+    const from = (currentPage - 1) * pageSize;
+    return existing.slice(from, from + pageSize);
+  }, [existing, currentPage, pageSize]);
+
+  const handleExistingPageChange = (page: number) => setCurrentPage(page);
+  const handleExistingPageSizeChange = (size: number) => { setPageSize(size); setCurrentPage(1); };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -321,46 +336,58 @@ export default function CreditSales() {
 
       {/* Existing credit records */}
       <Card className="p-5">
-        <h3 className="text-sm font-semibold text-slate-800 mb-3">Credit Sale Records</h3>
+        <h3 className="text-sm font-semibold text-slate-800 mb-3">
+          Credit Sale Records {existing.length > 0 && <span className="text-slate-400 font-normal">({existing.length})</span>}
+        </h3>
         {existing.length === 0 ? (
           <p className="text-sm text-slate-400 py-4 text-center">No credit sale records yet</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 text-xs">
-                <tr>
-                  <th className="px-3 py-2 text-left">Date</th>
-                  <th className="px-3 py-2 text-left">Customer</th>
-                  <th className="px-3 py-2 text-right">Amount</th>
-                  <th className="px-3 py-2 text-right">Settled</th>
-                  <th className="px-3 py-2 text-center">Status</th>
-                  <th className="px-3 py-2 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {existing.map((c) => (
-                  <tr key={c.id} className="hover:bg-slate-50">
-                    <td className="px-3 py-2 text-slate-700">{fmtDate(c.sale_date)}</td>
-                    <td className="px-3 py-2 text-slate-700 font-medium">{c.customer_name}</td>
-                    <td className="px-3 py-2 text-right">{fmtMoney(c.amount)}</td>
-                    <td className="px-3 py-2 text-right">{fmtMoney(c.settled_amount || 0)}</td>
-                    <td className="px-3 py-2 text-center"><Badge color={statusColor(c.status)}>{c.status}</Badge></td>
-                    <td className="px-3 py-2 text-center">
-                      <div className="inline-flex items-center gap-1">
-                        {c.status !== 'Settled' && (
-                          <>
-                            <button onClick={() => openSettle(c)} className="text-xs text-emerald-600 hover:underline font-medium">Settle</button>
-                            <button onClick={() => openEdit(c)} className="p-1 rounded-md hover:bg-blue-50 text-slate-400 hover:text-blue-600" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => setDeleteTarget(c)} className="p-1 rounded-md hover:bg-rose-50 text-slate-400 hover:text-rose-600" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
-                          </>
-                        )}
-                      </div>
-                    </td>
+          <>
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-xs">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Date</th>
+                    <th className="px-3 py-2 text-left">Customer</th>
+                    <th className="px-3 py-2 text-right">Amount</th>
+                    <th className="px-3 py-2 text-right">Settled</th>
+                    <th className="px-3 py-2 text-center">Status</th>
+                    <th className="px-3 py-2 text-center">Action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {paginatedExisting.map((c) => (
+                    <tr key={c.id} className="hover:bg-slate-50">
+                      <td className="px-3 py-2 text-slate-700">{fmtDate(c.sale_date)}</td>
+                      <td className="px-3 py-2 text-slate-700 font-medium">{c.customer_name}</td>
+                      <td className="px-3 py-2 text-right">{fmtMoney(c.amount)}</td>
+                      <td className="px-3 py-2 text-right">{fmtMoney(c.settled_amount || 0)}</td>
+                      <td className="px-3 py-2 text-center"><Badge color={statusColor(c.status)}>{c.status}</Badge></td>
+                      <td className="px-3 py-2 text-center">
+                        <div className="inline-flex items-center gap-1">
+                          {c.status !== 'Settled' && (
+                            <>
+                              <button onClick={() => openSettle(c)} className="text-xs text-emerald-600 hover:underline font-medium">Settle</button>
+                              <button onClick={() => openEdit(c)} className="p-1 rounded-md hover:bg-blue-50 text-slate-400 hover:text-blue-600" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                              <button onClick={() => setDeleteTarget(c)} className="p-1 rounded-md hover:bg-rose-50 text-slate-400 hover:text-rose-600" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={existingTotalPages}
+              totalItems={existing.length}
+              pageSize={pageSize}
+              onPageChange={handleExistingPageChange}
+              onPageSizeChange={handleExistingPageSizeChange}
+            />
+          </>
         )}
       </Card>
 

@@ -3,6 +3,7 @@ import { ClipboardList, Filter, Plus, Pencil, Trash2 } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import { Field, Input, Select } from '../../components/ui/Field';
 import { ConfirmModal } from '../../components/ui/Modal';
+import Pagination from '../../components/ui/Pagination';
 import { apiGet, apiPost, apiPut, apiDelete, fmtMoney, fmtDate } from '../../lib/api';
 
 type SettlementStatus = 'open' | 'settled';
@@ -43,6 +44,10 @@ export default function OperatorSalesManagement() {
   const [formErr, setFormErr] = useState('');
   const [formSaving, setFormSaving] = useState(false);
 
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
   // Delete
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
 
@@ -57,29 +62,39 @@ export default function OperatorSalesManagement() {
     } catch (_) { /* non-critical */ }
   }, []);
 
+  const buildQueryString = useCallback(() => {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    if (filterOperator) params.set('operator_name', filterOperator);
+    if (filterShift) params.set('shift_name', filterShift);
+    if (filterStatus) params.set('status', filterStatus);
+    return params.toString();
+  }, [dateFrom, dateTo, filterOperator, filterShift, filterStatus]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const params = new URLSearchParams();
-      if (dateFrom) params.set('date_from', dateFrom);
-      if (dateTo) params.set('date_to', dateTo);
-      if (filterOperator) params.set('operator_name', filterOperator);
-      if (filterShift) params.set('shift_name', filterShift);
-      if (filterStatus) params.set('status', filterStatus);
-      const res = await apiGet(`/api/operator-sales${params.toString() ? `?${params.toString()}` : ''}`);
+      const qs = buildQueryString();
+      const res = await apiGet(`/api/operator-sales${qs ? `?${qs}` : ''}`);
       setSettlements(Array.isArray(res) ? res : res.data || []);
     } catch (e: any) {
       setError(e.message || 'Failed to load');
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, filterOperator, filterShift, filterStatus]);
+  }, [buildQueryString]);
+
+  // Reset to page 1 when filters change
+  const handleFilterChange = () => {
+    setCurrentPage(1);
+  };
 
   useEffect(() => { loadMasters(); }, [loadMasters]);
   useEffect(() => { load(); }, [load]);
 
-  // Derived totals
+  // Derived totals (from all loaded data)
   const totals = useMemo(() => {
     let totalSales = 0, totalSubmitted = 0, totalVariance = 0, totalDeduction = 0, totalNet = 0;
     for (const s of settlements) {
@@ -91,6 +106,18 @@ export default function OperatorSalesManagement() {
     }
     return { totalSales, totalSubmitted, totalVariance, totalDeduction, totalNet };
   }, [settlements]);
+
+  // Paginated slice for display
+  const totalPages = Math.max(1, Math.ceil(settlements.length / pageSize));
+  const totalEntries = settlements.length;
+  const paginatedSettlements = useMemo(() => {
+    const from = (currentPage - 1) * pageSize;
+    const to = from + pageSize;
+    return settlements.slice(from, to);
+  }, [settlements, currentPage, pageSize]);
+
+  const handlePageChange = (page: number) => setCurrentPage(page);
+  const handlePageSizeChange = (size: number) => { setPageSize(size); setCurrentPage(1); };
 
   // Open create form
   const openCreate = () => {
@@ -229,25 +256,25 @@ export default function OperatorSalesManagement() {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <Field label="Date From">
-            <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <Input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); handleFilterChange(); }} />
           </Field>
           <Field label="Date To">
-            <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); handleFilterChange(); }} />
           </Field>
           <Field label="Operator">
-            <Select value={filterOperator} onChange={(e) => setFilterOperator(e.target.value)}>
+            <Select value={filterOperator} onChange={(e) => { setFilterOperator(e.target.value); handleFilterChange(); }}>
               <option value="">All Operators</option>
               {masterOperators.map((o) => <option key={o} value={o}>{o}</option>)}
             </Select>
           </Field>
           <Field label="Shift">
-            <Select value={filterShift} onChange={(e) => setFilterShift(e.target.value)}>
+            <Select value={filterShift} onChange={(e) => { setFilterShift(e.target.value); handleFilterChange(); }}>
               <option value="">All Shifts</option>
               {masterShifts.map((s) => <option key={s} value={s}>{s}</option>)}
             </Select>
           </Field>
           <Field label="Status">
-            <Select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+            <Select value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value); handleFilterChange(); }}>
               <option value="">All Status</option>
               <option value="open">Open</option>
               <option value="settled">Settled</option>
@@ -285,7 +312,7 @@ export default function OperatorSalesManagement() {
       {/* ── Settlements Table ── */}
       <Card className="p-5">
         <h3 className="text-sm font-semibold text-slate-800 mb-3">
-          Settlement Records {settlements.length > 0 && <span className="text-slate-400 font-normal">({settlements.length})</span>}
+          Settlement Records {totalEntries > 0 && <span className="text-slate-400 font-normal">({totalEntries})</span>}
         </h3>
         {loading ? (
           <p className="text-sm text-slate-400 text-center py-8">Loading...</p>
@@ -295,60 +322,70 @@ export default function OperatorSalesManagement() {
             <p className="text-xs text-slate-400 mt-1">Settlements are auto-created when daily sales entries are made with an operator assigned. Use <strong>Add Settlement</strong> to create one manually.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 text-xs">
-                <tr>
-                  <th className="px-3 py-2 text-left">Date</th>
-                  <th className="px-3 py-2 text-left">Shift</th>
-                  <th className="px-3 py-2 text-left">Operator</th>
-                  <th className="px-3 py-2 text-left">Dispenser</th>
-                  <th className="px-3 py-2 text-right">Meter Sales</th>
-                  <th className="px-3 py-2 text-right">Submitted</th>
-                  <th className="px-3 py-2 text-right">Variance</th>
-                  <th className="px-3 py-2 text-right">Deduction</th>
-                  <th className="px-3 py-2 text-right">Net Payable</th>
-                  <th className="px-3 py-2 text-center">Status</th>
-                  <th className="px-3 py-2 text-left">Remarks</th>
-                  <th className="px-3 py-2 text-center">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {settlements.map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-50">
-                    <td className="px-3 py-2 font-medium text-slate-700 whitespace-nowrap">{fmtDate(s.sale_date)}</td>
-                    <td className="px-3 py-2 text-slate-600">{s.shift_name}</td>
-                    <td className="px-3 py-2 text-slate-700 font-medium">{s.operator_name}</td>
-                    <td className="px-3 py-2 text-slate-600">{s.dispenser_name}</td>
-                    <td className="px-3 py-2 text-right text-slate-700">{fmtMoney(s.total_sales_amount)}</td>
-                    <td className="px-3 py-2 text-right text-slate-700">{fmtMoney(s.submitted_amount)}</td>
-                    <td className={`px-3 py-2 text-right font-medium ${Number(s.variance || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {Number(s.variance || 0) >= 0 ? '+' : ''}{fmtMoney(s.variance)}
-                    </td>
-                    <td className="px-3 py-2 text-right text-rose-600">{fmtMoney(s.deduction_amount)}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-indigo-700">{fmtMoney(s.net_payable)}</td>
-                    <td className="px-3 py-2 text-center">
-                      <button
-                        onClick={() => toggleStatus(s)}
-                        className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
-                          s.status === 'settled' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
-                        }`}
-                      >
-                        {s.status === 'settled' ? 'Settled' : 'Open'}
-                      </button>
-                    </td>
-                    <td className="px-3 py-2 text-slate-500 text-xs max-w-[140px] truncate">{s.remarks || '—'}</td>
-                    <td className="px-3 py-2 text-center">
-                      <div className="inline-flex items-center gap-1">
-                        <button onClick={() => openEdit(s)} className="p-1.5 rounded-md hover:bg-blue-50 text-slate-400 hover:text-blue-600" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => setDeleteTarget(s)} className="p-1.5 rounded-md hover:bg-rose-50 text-slate-400 hover:text-rose-600" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
-                      </div>
-                    </td>
+          <>
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-xs">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Date</th>
+                    <th className="px-3 py-2 text-left">Shift</th>
+                    <th className="px-3 py-2 text-left">Operator</th>
+                    <th className="px-3 py-2 text-left">Dispenser</th>
+                    <th className="px-3 py-2 text-right">Meter Sales</th>
+                    <th className="px-3 py-2 text-right">Submitted</th>
+                    <th className="px-3 py-2 text-right">Variance</th>
+                    <th className="px-3 py-2 text-right">Deduction</th>
+                    <th className="px-3 py-2 text-right">Net Payable</th>
+                    <th className="px-3 py-2 text-center">Status</th>
+                    <th className="px-3 py-2 text-left">Remarks</th>
+                    <th className="px-3 py-2 text-center">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {paginatedSettlements.map((s) => (
+                    <tr key={s.id} className="hover:bg-slate-50">
+                      <td className="px-3 py-2 font-medium text-slate-700 whitespace-nowrap">{fmtDate(s.sale_date)}</td>
+                      <td className="px-3 py-2 text-slate-600">{s.shift_name}</td>
+                      <td className="px-3 py-2 text-slate-700 font-medium">{s.operator_name}</td>
+                      <td className="px-3 py-2 text-slate-600">{s.dispenser_name}</td>
+                      <td className="px-3 py-2 text-right text-slate-700">{fmtMoney(s.total_sales_amount)}</td>
+                      <td className="px-3 py-2 text-right text-slate-700">{fmtMoney(s.submitted_amount)}</td>
+                      <td className={`px-3 py-2 text-right font-medium ${Number(s.variance || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {Number(s.variance || 0) >= 0 ? '+' : ''}{fmtMoney(s.variance)}
+                      </td>
+                      <td className="px-3 py-2 text-right text-rose-600">{fmtMoney(s.deduction_amount)}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-indigo-700">{fmtMoney(s.net_payable)}</td>
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          onClick={() => toggleStatus(s)}
+                          className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
+                            s.status === 'settled' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                          }`}
+                        >
+                          {s.status === 'settled' ? 'Settled' : 'Open'}
+                        </button>
+                      </td>
+                      <td className="px-3 py-2 text-slate-500 text-xs max-w-[140px] truncate">{s.remarks || '—'}</td>
+                      <td className="px-3 py-2 text-center">
+                        <div className="inline-flex items-center gap-1">
+                          <button onClick={() => openEdit(s)} className="p-1.5 rounded-md hover:bg-blue-50 text-slate-400 hover:text-blue-600" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => setDeleteTarget(s)} className="p-1.5 rounded-md hover:bg-rose-50 text-slate-400 hover:text-rose-600" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={totalEntries}
+              pageSize={pageSize}
+              onPageChange={handlePageChange}
+              onPageSizeChange={handlePageSizeChange}
+            />
+          </>
         )}
       </Card>
 
